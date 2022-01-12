@@ -12,13 +12,13 @@ use super::wasm::TxCache;
 #[cfg(feature = "wasm-runtime")]
 use super::wasm::VpCache;
 use super::WasmCacheAccess;
-use crate::gossip::mm::MmHost;
 use crate::ledger::gas::{self, BlockGasMeter, VpGasMeter};
 use crate::ledger::storage::write_log::{self, WriteLog};
 use crate::ledger::storage::{self, Storage, StorageHasher};
 use crate::ledger::vp_env;
 use crate::proto::Tx;
 use crate::types::address::{self, Address};
+use crate::types::ibc::IbcEvent;
 use crate::types::internal::HostEnvResult;
 use crate::types::key::ed25519::{verify_tx_sig, PublicKey, Signature};
 use crate::types::storage::Key;
@@ -431,55 +431,6 @@ where
             cache_access: std::marker::PhantomData,
         }
     }
-}
-
-/// A matchmakers's host environment
-pub struct MatchmakerEnv<MEM, MM>
-where
-    MEM: VmMemory,
-    MM: MmHost,
-{
-    /// The VM memory for bi-directional data passing
-    pub memory: MEM,
-    /// The matchmaker's host
-    pub mm: MM,
-}
-
-impl<MEM, MM> Clone for MatchmakerEnv<MEM, MM>
-where
-    MEM: VmMemory,
-    MM: MmHost,
-{
-    fn clone(&self) -> Self {
-        Self {
-            memory: self.memory.clone(),
-            mm: self.mm.clone(),
-        }
-    }
-}
-
-unsafe impl<MEM, MM> Send for MatchmakerEnv<MEM, MM>
-where
-    MEM: VmMemory,
-    MM: MmHost,
-{
-}
-
-unsafe impl<MEM, MM> Sync for MatchmakerEnv<MEM, MM>
-where
-    MEM: VmMemory,
-    MM: MmHost,
-{
-}
-
-#[derive(Clone)]
-/// A matchmakers filter's host environment
-pub struct FilterEnv<MEM>
-where
-    MEM: VmMemory,
-{
-    /// The VM memory for bi-directional data passing
-    pub memory: MEM,
 }
 
 /// Called from tx wasm to request to use the given gas amount
@@ -900,6 +851,31 @@ where
         .map_err(TxRuntimeError::StorageModificationError)?;
     tx_add_gas(env, gas)
     // TODO: charge the size diff
+}
+
+/// Emitting an IBC event function exposed to the wasm VM Tx environment.
+/// The given IBC event will be set to the write log.
+pub fn tx_emit_ibc_event<MEM, DB, H, CA>(
+    env: &TxEnv<MEM, DB, H, CA>,
+    event_ptr: u64,
+    event_len: u64,
+) -> TxResult<()>
+where
+    MEM: VmMemory,
+    DB: storage::DB + for<'iter> storage::DBIter<'iter>,
+    H: StorageHasher,
+    CA: WasmCacheAccess,
+{
+    let (event, gas) = env
+        .memory
+        .read_bytes(event_ptr, event_len as _)
+        .map_err(|e| TxRuntimeError::MemoryError(Box::new(e)))?;
+    tx_add_gas(env, gas)?;
+    let event: IbcEvent = BorshDeserialize::try_from_slice(&event)
+        .map_err(TxRuntimeError::EncodingError)?;
+    let write_log = unsafe { env.ctx.write_log.get() };
+    let gas = write_log.set_ibc_event(event);
+    tx_add_gas(env, gas)
 }
 
 /// Storage read prior state (before tx execution) function exposed to the wasm
@@ -1589,95 +1565,6 @@ where
         .map_err(|e| vp_env::RuntimeError::MemoryError(Box::new(e)))?;
     tracing::info!("WASM Validity predicate log: {}", str);
     Ok(())
-}
-
-/// Remove given intents from the matchmaker's mempool
-pub fn mm_remove_intents<MEM, MM>(
-    env: &MatchmakerEnv<MEM, MM>,
-    intents_id_ptr: u64,
-    intents_id_len: u64,
-) where
-    MEM: VmMemory,
-    MM: MmHost,
-{
-    let (intents_id_bytes, _gas) = env
-        .memory
-        .read_bytes(intents_id_ptr, intents_id_len as _)
-        .expect("TODO: handle runtime errors");
-
-    let intents_id =
-        HashSet::<Vec<u8>>::try_from_slice(&intents_id_bytes).unwrap();
-
-    env.mm.remove_intents(intents_id);
-}
-
-/// Injupdate_stateaction from matchmaker's matched intents to the ledger
-pub fn mm_send_match<MEM, MM>(
-    env: &MatchmakerEnv<MEM, MM>,
-    data_ptr: u64,
-    data_len: u64,
-) where
-    MEM: VmMemory,
-    MM: MmHost,
-{
-    let (tx_data, _gas) = env
-        .memory
-        .read_bytes(data_ptr, data_len as _)
-        .expect("TODO: handle runtime errors");
-
-    env.mm.inject_tx(tx_data);
-}
-
-/// Update matchmaker's state data
-pub fn mm_update_state<MEM, MM>(
-    env: &MatchmakerEnv<MEM, MM>,
-    state_ptr: u64,
-    state_len: u64,
-) where
-    MEM: VmMemory,
-    MM: MmHost,
-{
-    let (data, _gas) = env
-        .memory
-        .read_bytes(state_ptr, state_len as _)
-        .expect("TODO: handle runtime errors");
-
-    env.mm.update_state(data);
-}
-
-/// Log a string from exposed to the wasm VM matchmaker environment. The message
-/// will be printed at the [`tracing::Level::INFO`]. This function is for
-/// development only.
-pub fn mm_log_string<MEM, MM>(
-    env: &MatchmakerEnv<MEM, MM>,
-    str_ptr: u64,
-    str_len: u64,
-) where
-    MEM: VmMemory,
-    MM: MmHost,
-{
-    let (str, _gas) = env
-        .memory
-        .read_string(str_ptr, str_len as _)
-        .expect("TODO: handle runtime errors");
-
-    tracing::info!("WASM Matchmaker log: {}", str);
-}
-
-/// Log a string from exposed to the wasm VM filter environment. The message
-/// will be printed at the [`tracing::Level::INFO`].
-pub fn mm_filter_log_string<MEM>(
-    env: &FilterEnv<MEM>,
-    str_ptr: u64,
-    str_len: u64,
-) where
-    MEM: VmMemory,
-{
-    let (str, _gas) = env
-        .memory
-        .read_string(str_ptr, str_len as _)
-        .expect("TODO: handle runtime errors");
-    tracing::info!("WASM Filter log: {}", str);
 }
 
 /// A helper module for testing

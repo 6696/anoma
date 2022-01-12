@@ -47,9 +47,6 @@ pub async fn join_network(
     global_args: args::Global,
     args::JoinNetwork { chain_id }: args::JoinNetwork,
 ) {
-    let chain_dir = global_args.base_dir.join(chain_id.as_str());
-    fs::create_dir_all(&chain_dir).expect("Couldn't create chain directory");
-
     let release_filename = format!("{}.tar.gz", chain_id);
     let release_url =
         format!("{}/{}/{}", RELEASE_PREFIX, chain_id, release_filename);
@@ -64,6 +61,14 @@ pub async fn join_network(
     decoder.read_to_string(&mut tar).unwrap();
     let mut archive = tar::Archive::new(tar.as_bytes());
     archive.unpack(".").unwrap();
+
+    // If the base-dir is not the default, move the network config into it
+    let base_dir_name = global_args.base_dir.file_name();
+    if let Some(base_dir_name) = base_dir_name {
+        if base_dir_name != config::DEFAULT_BASE_DIR {
+            tokio::fs::rename(".anoma", base_dir_name).await.unwrap();
+        }
+    }
 
     println!("Successfully configured for chain ID {}", chain_id);
 }
@@ -116,7 +121,7 @@ pub fn init_network(
         Vec::with_capacity(config.validator.len());
     // Intent gossiper config bootstrap peers where we'll add the address for
     // each validator's node
-    let mut bootstrap_peers: HashSet<PeerAddress> =
+    let mut seed_peers: HashSet<PeerAddress> =
         HashSet::with_capacity(config.validator.len());
     let mut gossiper_configs: HashMap<String, IntentGossiper> =
         HashMap::with_capacity(config.validator.len());
@@ -196,6 +201,10 @@ pub fn init_network(
             )
             .unwrap()
         };
+        if let Some(discover) = gossiper_config.discover_peer.as_mut() {
+            // Disable mDNS local network peer discovery on the validator nodes
+            discover.mdns = false;
+        }
         let intent_peer = PeerAddress {
             address: intent_peer_address,
             peer_id,
@@ -254,6 +263,10 @@ pub fn init_network(
             &config.matchmaker_tx,
         ) {
             (Some(account), Some(mm_code), Some(tx_code)) => {
+                if config.intent_gossip_seed.unwrap_or_default() {
+                    eprintln!("A bootstrap node cannot run matchmakers");
+                    cli::safe_exit(1)
+                }
                 match established_accounts.as_ref().and_then(|e| e.get(account))
                 {
                     Some(matchmaker) => {
@@ -302,10 +315,19 @@ pub fn init_network(
 
         // Store the gossip config
         gossiper_configs.insert(name.clone(), gossiper_config);
-        bootstrap_peers.insert(intent_peer);
+        if config.intent_gossip_seed.unwrap_or_default() {
+            seed_peers.insert(intent_peer);
+        }
 
         wallet.save().unwrap();
     });
+
+    if seed_peers.is_empty() && config.validator.len() > 1 {
+        tracing::warn!(
+            "At least 1 validator with `intent_gossip_seed = true` is needed \
+             to established connection between the intent gossiper nodes"
+        );
+    }
 
     // Create a wallet for all accounts other than validators
     let mut wallet =
@@ -484,9 +506,7 @@ pub fn init_network(
 
             // Configure the intent gossiper
             config.intent_gossiper = gossiper_configs.remove(name).unwrap();
-            if let Some(discover) = &mut config.intent_gossiper.discover_peer {
-                discover.bootstrap_peers = bootstrap_peers.clone();
-            }
+            config.intent_gossiper.seed_peers = seed_peers.clone();
             config.intent_gossiper.rpc = Some(config::RpcServer {
                 address: SocketAddr::new(
                     IpAddr::V4(if localhost {
@@ -521,9 +541,7 @@ pub fn init_network(
             .set_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
     }
     config.ledger.genesis_time = genesis.genesis_time.into();
-    if let Some(discover) = &mut config.intent_gossiper.discover_peer {
-        discover.bootstrap_peers = bootstrap_peers;
-    }
+    config.intent_gossiper.seed_peers = seed_peers;
     config
         .write(&global_args.base_dir, &chain_id, true)
         .unwrap();

@@ -9,13 +9,16 @@
 //! To keep the temporary files created by a test, use env var
 //! `ANOMA_E2E_KEEP_TEMP=true`.
 
+use std::env;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 
 use color_eyre::eyre::Result;
+use escargot::CargoBuild;
 use serde_json::json;
 use setup::constants::*;
 
+use super::setup::ENV_VAR_DEBUG;
 use crate::e2e::helpers::find_address;
 use crate::e2e::setup::{self, Bin, Who};
 use crate::{run, run_as};
@@ -23,22 +26,27 @@ use crate::{run, run_as};
 /// Test that when we "run-gossip" a peer with no seeds should fail
 /// bootstrapping kademlia. A peer with a seed should be able to
 /// bootstrap kademia and connect to the other peer.
+/// In this test we:
+/// 1. Check that a gossip node can start and stop cleanly
+/// 2. Check that two peers connected to the same seed node discover each other
 #[test]
 fn run_gossip() -> Result<()> {
     let test =
-        setup::network(|genesis| setup::add_validators(1, genesis), None)?;
+        setup::network(|genesis| setup::add_validators(2, genesis), None)?;
 
-    let mut cmd =
-        run_as!(test, Who::Validator(0), Bin::Node, &["gossip"], Some(20),)?;
-    // Node without peers
-    cmd.exp_regex(r"Peer id: PeerId\(.*\)")?;
+    // 1. Start the first gossip node and then stop it
+    let mut node_0 =
+        run_as!(test, Who::Validator(0), Bin::Node, &["gossip"], Some(40))?;
+    node_0.send_control('c')?;
+    node_0.exp_eof()?;
+    drop(node_0);
 
-    drop(cmd);
-
-    let mut first_node =
-        run_as!(test, Who::Validator(0), Bin::Node, &["gossip"], Some(20),)?;
-    let (_unread, matched) = first_node.exp_regex(r"Peer id: PeerId\(.*\)")?;
-    let first_node_peer_id = matched
+    // 2. Check that two peers connected to the same seed node discover each
+    // other. Start the first gossip node again (the seed node).
+    let mut node_0 =
+        run_as!(test, Who::Validator(0), Bin::Node, &["gossip"], Some(40))?;
+    let (_unread, matched) = node_0.exp_regex(r"Peer id: PeerId\(.*\)")?;
+    let node_0_peer_id = matched
         .trim()
         .rsplit_once("\"")
         .unwrap()
@@ -47,14 +55,36 @@ fn run_gossip() -> Result<()> {
         .unwrap()
         .1;
 
-    let mut second_node =
-        run_as!(test, Who::Validator(1), Bin::Node, &["gossip"], Some(20),)?;
+    // Start the second gossip node (a peer node)
+    let mut node_1 =
+        run_as!(test, Who::Validator(1), Bin::Node, &["gossip"], Some(40))?;
 
-    second_node.exp_regex(r"Peer id: PeerId\(.*\)")?;
-    second_node.exp_string(&format!(
+    let (_unread, matched) = node_1.exp_regex(r"Peer id: PeerId\(.*\)")?;
+    let node_1_peer_id = matched
+        .trim()
+        .rsplit_once("\"")
+        .unwrap()
+        .0
+        .rsplit_once("\"")
+        .unwrap()
+        .1;
+    node_1.exp_string(&format!(
         "Connect to a new peer: PeerId(\"{}\")",
-        first_node_peer_id
+        node_0_peer_id
     ))?;
+
+    // Start the third gossip node (another peer node)
+    let mut node_2 =
+        run_as!(test, Who::Validator(2), Bin::Node, &["gossip"], Some(20))?;
+    // The third node should connect to node 1 via Identify and Kademlia peer
+    // discovery protocol
+    node_2.exp_string(&format!(
+        "Connect to a new peer: PeerId(\"{}\")",
+        node_1_peer_id
+    ))?;
+    node_2.exp_string(&format!("Identified Peer {}", node_1_peer_id))?;
+    node_2
+        .exp_string(&format!("Routing updated peer ID: {}", node_1_peer_id))?;
 
     Ok(())
 }
@@ -66,8 +96,36 @@ fn run_gossip() -> Result<()> {
 fn match_intents() -> Result<()> {
     let test = setup::single_node_net()?;
 
+    // Make sure that the default matchmaker is built
+    println!("Building the matchmaker \"mm_token_exch\" implementation...");
+    let run_debug = match env::var(ENV_VAR_DEBUG) {
+        Ok(val) => val.to_ascii_lowercase() != "false",
+        _ => false,
+    };
+    let manifest_path = test
+        .working_dir
+        .join("matchmaker")
+        .join("mm_token_exch")
+        .join("Cargo.toml");
+    let cmd = if !cfg!(feature = "ABCI") {
+        CargoBuild::new()
+            .manifest_path(manifest_path)
+            .no_default_features()
+            .features("ABCI-plus-plus")
+    } else {
+        CargoBuild::new()
+            .manifest_path(manifest_path)
+            .features("ABCI")
+    };
+    let cmd = if run_debug { cmd } else { cmd.release() };
+    let msgs = cmd.exec().unwrap();
+    for msg in msgs {
+        msg.unwrap();
+    }
+    println!("Done building the matchmaker.");
+
     let mut ledger =
-        run_as!(test, Who::Validator(0), Bin::Node, &["ledger"], Some(20),)?;
+        run_as!(test, Who::Validator(0), Bin::Node, &["ledger"], Some(40))?;
     ledger.exp_string("Anoma ledger node started")?;
     ledger.exp_string("No state could be found")?;
     // Wait to commit a block
@@ -134,7 +192,7 @@ fn match_intents() -> Result<()> {
             "--signing-key",
             "matchmaker-key",
         ],
-        Some(20),
+        Some(40)
     )?;
 
     // Wait gossip to start

@@ -2,6 +2,7 @@
 
 pub mod genesis;
 pub mod global;
+pub mod utils;
 
 use std::collections::HashSet;
 use std::fmt::Display;
@@ -116,6 +117,9 @@ pub struct Tendermint {
     /// height
     pub consensus_timeout_commit: Timeout,
     pub tendermint_mode: TendermintMode,
+    pub instrumentation_prometheus: bool,
+    pub instrumentation_prometheus_listen_addr: SocketAddr,
+    pub instrumentation_namespace: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -123,6 +127,7 @@ pub struct IntentGossiper {
     pub address: Multiaddr,
     pub topics: HashSet<String>,
     pub subscription_filter: SubscriptionFilter,
+    pub seed_peers: HashSet<PeerAddress>,
     pub rpc: Option<RpcServer>,
     pub discover_peer: Option<DiscoverPeer>,
     pub matchmaker: Option<Matchmaker>,
@@ -163,6 +168,12 @@ impl Ledger {
                 p2p_allow_duplicate_ip: false,
                 consensus_timeout_commit: Timeout::from_str("1s").unwrap(),
                 tendermint_mode: mode,
+                instrumentation_prometheus: false,
+                instrumentation_prometheus_listen_addr: SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                    26661,
+                ),
+                instrumentation_namespace: "anoman_tm".to_string(),
             },
         }
     }
@@ -231,9 +242,10 @@ pub struct PeerAddress {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DiscoverPeer {
     pub max_discovery_peers: u64,
+    /// Toggle Kademlia remote peer discovery, on by default
     pub kademlia: bool,
+    /// Toggle local network mDNS peer discovery, off by default
     pub mdns: bool,
-    pub bootstrap_peers: HashSet<PeerAddress>,
 }
 
 #[derive(Error, Debug)]
@@ -308,7 +320,8 @@ impl Config {
     }
 
     /// Read the config from a file, or generate a default one and write it to
-    /// a file if it doesn't already exist.
+    /// a file if it doesn't already exist. Keys that are expected but not set
+    /// in the config file are filled in with default values.
     pub fn read(
         base_dir: &Path,
         chain_id: &ChainId,
@@ -319,9 +332,21 @@ impl Config {
         if !file_path.exists() {
             return Self::generate(base_dir, chain_id, mode, true);
         };
+        let defaults = config::Config::try_from(&Self::new(
+            base_dir,
+            chain_id.clone(),
+            mode,
+        ))
+        .map_err(Error::ReadError)?;
         let mut config = config::Config::new();
         config
-            .merge(config::File::with_name(file_name))
+            .merge(defaults)
+            .and_then(|c| c.merge(config::File::with_name(file_name)))
+            .and_then(|c| {
+                c.merge(
+                    config::Environment::with_prefix("anoma").separator("__"),
+                )
+            })
             .map_err(Error::ReadError)?;
         config.try_into().map_err(Error::DeserializationError)
     }
@@ -377,14 +402,14 @@ impl Default for IntentGossiper {
     fn default() -> Self {
         Self {
             address: Multiaddr::from_str("/ip4/0.0.0.0/tcp/26659").unwrap(),
-            rpc: None,
+            topics: vec!["asset_v0"].into_iter().map(String::from).collect(),
             subscription_filter: SubscriptionFilter::RegexFilter(
                 Regex::new("asset_v\\d{1,2}").unwrap(),
             ),
-
-            topics: vec!["asset_v0"].into_iter().map(String::from).collect(),
-            matchmaker: None,
+            seed_peers: HashSet::default(),
+            rpc: None,
             discover_peer: Some(DiscoverPeer::default()),
+            matchmaker: None,
         }
     }
 }
@@ -447,55 +472,6 @@ impl IntentGossiper {
             self.rpc = Some(RpcServer { address });
         }
     }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub fn default_with_address(
-        ip: String,
-        port: u32,
-        peers_info: Vec<(String, u32, PeerId)>,
-        mdns: bool,
-        kademlia: bool,
-        matchmaker: bool,
-        rpc: bool,
-    ) -> Self {
-        let mut gossiper_config = IntentGossiper::default();
-        let mut discover_config = DiscoverPeer::default();
-
-        gossiper_config.address =
-            Multiaddr::from_str(format!("/ip4/{}/tcp/{}", ip, port).as_str())
-                .unwrap();
-
-        if matchmaker {
-            gossiper_config.matchmaker = Some(Matchmaker {
-                matchmaker: "../wasm/mm_token_exch.wasm".parse().unwrap(),
-                tx_code: "../wasm/tx_from_intent.wasm".parse().unwrap(),
-                ledger_address: "0.0.0.0:26657".parse().unwrap(),
-                filter: None,
-            })
-        }
-
-        if rpc {
-            gossiper_config.rpc = Some(RpcServer::default())
-        }
-
-        let bootstrap_peers: HashSet<PeerAddress> = peers_info
-            .iter()
-            .map(|info| PeerAddress {
-                address: Multiaddr::from_str(
-                    format!("/ip4/{}/tcp/{}", info.0, info.1).as_str(),
-                )
-                .unwrap(),
-                peer_id: info.2,
-            })
-            .collect();
-        discover_config.bootstrap_peers = bootstrap_peers;
-        discover_config.mdns = mdns;
-        discover_config.kademlia = kademlia;
-
-        gossiper_config.discover_peer = Some(discover_config);
-
-        gossiper_config
-    }
 }
 
 impl Default for RpcServer {
@@ -550,16 +526,11 @@ impl<'de> Deserialize<'de> for PeerAddress {
 }
 
 impl Default for DiscoverPeer {
-    /// default configuration for discovering peer.
-    /// max_discovery_peers: 16,
-    /// kademlia: true,
-    /// mdns: true,
     fn default() -> Self {
         Self {
             max_discovery_peers: 16,
             kademlia: true,
-            mdns: true,
-            bootstrap_peers: HashSet::new(),
+            mdns: false,
         }
     }
 }

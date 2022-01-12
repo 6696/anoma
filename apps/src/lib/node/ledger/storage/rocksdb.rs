@@ -3,39 +3,47 @@
 //! The current storage tree is:
 //! - `chain_id`
 //! - `height`: the last committed block height
-//! - `epoch_start_height`: block height at which the current epoch started
-//! - `epoch_start_time`: block time at which the current epoch started
-//! - `subspace`: any byte data associated with accounts
-//! - `history/subspace`: list of block heights at which any given subspace key
-//!   has changed
+//! - `tx_queue`: txs to be decrypted in the next block
+//! - `pred`: predecessor values of the top-level keys of the same name
+//!   - `tx_queue`
+//! - `next_epoch_min_start_height`: minimum block height from which the next
+//!   epoch can start
+//! - `next_epoch_min_start_time`: minimum block time from which the next epoch
+//!   can start
+//! - `pred`: predecessor values of the top-level keys of the same name
+//!   - `next_epoch_min_start_height`
+//!   - `next_epoch_min_start_time`
+//! - `subspace`: accounts sub-spaces
+//!   - `{address}/{dyn}`: any byte data associated with accounts
 //! - `h`: for each block at height `h`:
 //!   - `tree`: merkle tree
 //!     - `root`: root hash
 //!     - `store`: the tree's store
 //!   - `hash`: block hash
 //!   - `epoch`: block epoch
-//!   - `subspace`: historical values of accounts data, only set at heights at
-//!     which the data has changed
 //!   - `address_gen`: established address generator
+//!   - `diffs`: diffs in account subspaces' key-vals
+//!     - `new/{dyn}`: value set in block height `h`
+//!     - `old/{dyn}`: value from predecessor block height
 
-use std::cmp::{self, Ordering};
-use std::env;
+use std::cmp::Ordering;
 use std::path::Path;
-use std::str::FromStr;
 
 use anoma::ledger::storage::types::PrefixIterator;
 use anoma::ledger::storage::{
     types, BlockStateRead, BlockStateWrite, DBIter, DBWriteBatch, Error,
     Result, DB,
 };
-use anoma::types::storage::{BlockHeight, Key, KeySeg, KEY_SEGMENT_SEPARATOR};
+use anoma::types::storage::{
+    BlockHeight, Key, KeySeg, TxQueue, KEY_SEGMENT_SEPARATOR,
+};
 use anoma::types::time::DateTimeUtc;
 use rocksdb::{
     BlockBasedOptions, Direction, FlushOptions, IteratorMode, Options,
     ReadOptions, SliceTransform, WriteBatch, WriteOptions,
 };
 
-use crate::cli;
+use crate::config::utils::num_of_threads;
 
 // TODO the DB schema will probably need some kind of versioning
 
@@ -56,24 +64,12 @@ pub fn open(
     path: impl AsRef<Path>,
     cache: Option<&rocksdb::Cache>,
 ) -> Result<RocksDB> {
-    let logical_cores = num_cpus::get() as i32;
-    let compaction_threads =
-        if let Ok(num_str) = env::var(ENV_VAR_ROCKSDB_COMPACTION_THREADS) {
-            match i32::from_str(&num_str) {
-                Ok(num) if num > 0 => num,
-                _ => {
-                    eprintln!(
-                        "Invalid env. var {} value: {}. Expecting a positive \
-                         number.",
-                        ENV_VAR_ROCKSDB_COMPACTION_THREADS, num_str
-                    );
-                    cli::safe_exit(1)
-                }
-            }
-        } else {
-            // If not set, default to quarter of logical CPUs count
-            cmp::max(1, logical_cores / 4)
-        };
+    let logical_cores = num_cpus::get();
+    let compaction_threads = num_of_threads(
+        ENV_VAR_ROCKSDB_COMPACTION_THREADS,
+        // If not set, default to quarter of logical CPUs count
+        logical_cores / 4,
+    ) as i32;
     tracing::info!(
         "Using {} compactions threads for RocksDB.",
         compaction_threads
@@ -107,6 +103,7 @@ pub fn open(
 
     cf_opts.create_missing_column_families(true);
     cf_opts.create_if_missing(true);
+    cf_opts.set_atomic_flush(true);
 
     cf_opts.set_comparator("key_comparator", key_comparator);
     let extractor = SliceTransform::create_fixed_prefix(20);
@@ -147,11 +144,19 @@ fn key_comparator(a: &[u8], b: &[u8]) -> Ordering {
 
 impl Drop for RocksDB {
     fn drop(&mut self) {
-        self.flush().expect("flush failed");
+        self.flush(true).expect("flush failed");
     }
 }
 
 impl RocksDB {
+    fn flush(&self, wait: bool) -> Result<()> {
+        let mut flush_opts = FlushOptions::default();
+        flush_opts.set_wait(wait);
+        self.0
+            .flush_opt(&flush_opts)
+            .map_err(|e| Error::DBError(e.into_string()))
+    }
+
     /// Persist the diff of an account subspace key-val under the height where
     /// it was changed.
     fn write_subspace_diff(
@@ -242,9 +247,9 @@ impl DB for RocksDB {
         open(db_path, cache).expect("cannot open the DB")
     }
 
-    fn flush(&self) -> Result<()> {
+    fn flush(&self, wait: bool) -> Result<()> {
         let mut flush_opts = FlushOptions::default();
-        flush_opts.set_wait(true);
+        flush_opts.set_wait(wait);
         self.0
             .flush_opt(&flush_opts)
             .map_err(|e| Error::DBError(e.into_string()))
@@ -290,6 +295,17 @@ impl DB for RocksDB {
                 tracing::error!(
                     "Couldn't load next epoch start time from the DB"
                 );
+                return Ok(None);
+            }
+        };
+        let tx_queue: TxQueue = match self
+            .0
+            .get("tx_queue")
+            .map_err(|e| Error::DBError(e.into_string()))?
+        {
+            Some(bytes) => types::decode(bytes).map_err(Error::CodingError)?,
+            None => {
+                tracing::error!("Couldn't load tx queue from the DB");
                 return Ok(None);
             }
         };
@@ -360,6 +376,9 @@ impl DB for RocksDB {
                             types::decode(bytes).map_err(Error::CodingError)?,
                         );
                     }
+                    "diffs" => {
+                        // ignore the diffs
+                    }
                     _ => unknown_key_error(path)?,
                 },
                 None => unknown_key_error(path)?,
@@ -383,6 +402,7 @@ impl DB for RocksDB {
                 next_epoch_min_start_height,
                 next_epoch_min_start_time,
                 address_gen,
+                tx_queue,
             })),
             _ => Err(Error::Temporary {
                 error: "Essential data couldn't be read from the DB"
@@ -403,17 +423,45 @@ impl DB for RocksDB {
             next_epoch_min_start_height,
             next_epoch_min_start_time,
             address_gen,
+            tx_queue,
         }: BlockStateWrite = state;
 
         // Epoch start height and time
+        if let Some(current_value) =
+            self.0
+                .get("next_epoch_min_start_height")
+                .map_err(|e| Error::DBError(e.into_string()))?
+        {
+            // Write the predecessor value for rollback
+            batch.put("pred/next_epoch_min_start_height", current_value);
+        }
         batch.put(
             "next_epoch_min_start_height",
             types::encode(&next_epoch_min_start_height),
         );
+
+        if let Some(current_value) = self
+            .0
+            .get("next_epoch_min_start_time")
+            .map_err(|e| Error::DBError(e.into_string()))?
+        {
+            // Write the predecessor value for rollback
+            batch.put("pred/next_epoch_min_start_time", current_value);
+        }
         batch.put(
             "next_epoch_min_start_time",
             types::encode(&next_epoch_min_start_time),
         );
+        // Tx queue
+        if let Some(pred_tx_queue) = self
+            .0
+            .get("tx_queue")
+            .map_err(|e| Error::DBError(e.into_string()))?
+        {
+            // Write the predecessor value for rollback
+            batch.put("pred/tx_queue", pred_tx_queue);
+        }
+        batch.put("tx_queue", types::encode(&tx_queue));
 
         let prefix_key = Key::from(height.to_db_key());
         // Merkle tree
@@ -464,16 +512,15 @@ impl DB for RocksDB {
                 .map_err(Error::KeyError)?;
             batch.put(key.to_string(), types::encode(&address_gen));
         }
+
+        // Block height
+        batch.put("height", types::encode(&height));
+
+        // Write the batch
         self.exec_batch(batch)?;
 
-        // Block height - write after everything else is written
-        // NOTE for async writes, we need to take care that all previous heights
-        // are known when updating this
-        let mut write_opts = WriteOptions::default();
-        write_opts.disable_wal(true);
-        self.0
-            .put_opt("height", types::encode(&height), &write_opts)
-            .map_err(|e| Error::DBError(e.into_string()))
+        // Flush without waiting
+        self.flush(false)
     }
 
     fn read_subspace_val(&self, key: &Key) -> Result<Option<Vec<u8>>> {
@@ -772,5 +819,64 @@ mod imp {
             );
             Ok(soft)
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use anoma::types::address::EstablishedAddressGen;
+    use anoma::types::storage::{BlockHash, Epoch, Epochs};
+    use sparse_merkle_tree::default_store::DefaultStore;
+    use sparse_merkle_tree::H256;
+    use tempfile::tempdir;
+
+    use super::*;
+
+    /// Test that a block written can be loaded back from DB.
+    #[test]
+    fn test_load_state() {
+        let dir = tempdir().unwrap();
+        let mut db = open(dir.path(), None).unwrap();
+
+        let mut batch = RocksDB::batch();
+        let last_height = BlockHeight::default();
+        db.batch_write_subspace_val(
+            &mut batch,
+            last_height,
+            &Key::parse("test").unwrap(),
+            vec![1_u8, 1, 1, 1],
+        )
+        .unwrap();
+        db.exec_batch(batch.0).unwrap();
+
+        let root = H256::zero();
+        let store = DefaultStore::default();
+        let hash = BlockHash::default();
+        let epoch = Epoch::default();
+        let pred_epochs = Epochs::default();
+        let height = BlockHeight::default();
+        let next_epoch_min_start_height = BlockHeight::default();
+        let next_epoch_min_start_time = DateTimeUtc::now();
+        let address_gen = EstablishedAddressGen::new("whatever");
+        let tx_queue = TxQueue::default();
+        let block = BlockStateWrite {
+            root,
+            store: &store,
+            hash: &hash,
+            height,
+            epoch,
+            pred_epochs: &pred_epochs,
+            next_epoch_min_start_height,
+            next_epoch_min_start_time,
+            address_gen: &address_gen,
+            tx_queue: &tx_queue,
+        };
+
+        db.write_block(block).unwrap();
+
+        let _state = db
+            .read_last_block()
+            .expect("Should be able to read last block")
+            .expect("Block should have been written");
     }
 }
