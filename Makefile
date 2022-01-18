@@ -28,10 +28,10 @@ build-test-abci-plus-plus:
 	$(cargo) build --tests --no-default-features --features "ABCI-plus-plus"
 
 build-release:
-	$(cargo) build --release --package anoma_apps
+	ANOMA_DEV=false $(cargo) build --release --package anoma_apps
 
 check-release:
-	$(cargo) check --release --package anoma_apps
+	ANOMA_DEV=false $(cargo) check --release --package anoma_apps
 
 package: build-release
 	scripts/make-package.sh
@@ -218,7 +218,7 @@ dev-deps:
 	$(rustup) toolchain install $(nightly)
 	$(rustup) target add wasm32-unknown-unknown
 	$(rustup) component add rustfmt clippy miri --toolchain $(nightly)
-	$(cargo) install cargo-watch
+	$(cargo) install cargo-watch unclog
 
 test-miri:
 	$(cargo) +$(nightly) miri setup
