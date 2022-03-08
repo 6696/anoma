@@ -65,6 +65,9 @@ pub async fn main() -> Result<()> {
                 Sub::Intent(Intent(args)) => {
                     gossip::gossip_intent(ctx, args).await;
                 }
+                Sub::AuctionIntent(AuctionIntent(args)) => {
+                    gossip::gossip_auction_intent(ctx, args).await;
+                }
                 Sub::SubscribeTopic(SubscribeTopic(args)) => {
                     gossip::subscribe_topic(ctx, args).await;
                 }

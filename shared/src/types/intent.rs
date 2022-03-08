@@ -31,6 +31,23 @@ pub struct FungibleTokenIntent {
     pub exchange: HashSet<Signed<Exchange>>,
 }
 
+
+/// A simple intent for auction
+#[derive(
+Debug,
+Clone,
+PartialEq,
+BorshSerialize,
+BorshDeserialize,
+Serialize,
+Deserialize,
+Eq,
+)]
+pub struct AuctionIntent {
+    /// List of exchange definitions
+    pub auctions: HashSet<Signed<Auction>>,
+}
+
 #[derive(
     Debug,
     Clone,
@@ -61,6 +78,31 @@ pub struct Exchange {
     /// The vp code
     #[derivative(Debug = "ignore")]
     pub vp: Option<Vec<u8>>,
+}
+
+#[derive(
+Debug,
+Clone,
+BorshSerialize,
+BorshDeserialize,
+Serialize,
+Deserialize,
+Eq,
+PartialEq,
+Hash,
+PartialOrd,
+Derivative,
+)]
+/// The definition of an intent exchange
+pub struct Auction {
+    /// The source address
+    pub addr: Address,
+    /// The token to be sold
+    pub token_sell: Address,
+    /// The token to be bought
+    pub token_buy: Address,
+    /// The amount of token to be put on auction
+    pub amount: token::Amount,
 }
 
 /// These are transfers crafted from matched [`Exchange`]s created by a

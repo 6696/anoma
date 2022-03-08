@@ -51,6 +51,7 @@ pub mod cmds {
         TxInitNft(TxInitNft),
         TxMintNft(TxMintNft),
         Intent(Intent),
+        AuctionIntent(AuctionIntent),
     }
 
     impl Cmd for Anoma {
@@ -67,6 +68,7 @@ pub mod cmds {
                 .subcommand(TxInitNft::def())
                 .subcommand(TxMintNft::def())
                 .subcommand(Intent::def())
+                .subcommand(AuctionIntent::def())
         }
 
         fn parse(matches: &ArgMatches) -> Option<Self> {
@@ -82,6 +84,7 @@ pub mod cmds {
             let tx_nft_create = SubCmd::parse(matches).map(Self::TxInitNft);
             let tx_nft_mint = SubCmd::parse(matches).map(Self::TxMintNft);
             let intent = SubCmd::parse(matches).map(Self::Intent);
+            let auction_intent = SubCmd::parse(matches).map(Self::AuctionIntent);
             node.or(client)
                 .or(wallet)
                 .or(ledger)
@@ -93,6 +96,7 @@ pub mod cmds {
                 .or(tx_nft_create)
                 .or(tx_nft_mint)
                 .or(intent)
+                .or(auction_intent)
         }
     }
 
@@ -179,6 +183,7 @@ pub mod cmds {
                 .subcommand(QueryResult::def().display_order(3))
                 // Intents
                 .subcommand(Intent::def().display_order(4))
+                .subcommand(AuctionIntent::def().display_order(4))
                 .subcommand(SubscribeTopic::def().display_order(4))
                 // Utils
                 .subcommand(Utils::def().display_order(5))
@@ -205,6 +210,7 @@ pub mod cmds {
             let query_slashes = Self::parse_with_ctx(matches, QuerySlashes);
             let query_result = Self::parse_with_ctx(matches, QueryResult);
             let intent = Self::parse_with_ctx(matches, Intent);
+            let auction_intent = Self::parse_with_ctx(matches, AuctionIntent);
             let subscribe_topic = Self::parse_with_ctx(matches, SubscribeTopic);
             let utils = SubCmd::parse(matches).map(Self::WithoutContext);
             tx_custom
@@ -224,6 +230,7 @@ pub mod cmds {
                 .or(query_slashes)
                 .or(query_result)
                 .or(intent)
+                .or(auction_intent)
                 .or(subscribe_topic)
                 .or(utils)
         }
@@ -279,6 +286,7 @@ pub mod cmds {
         QuerySlashes(QuerySlashes),
         // Gossip cmds
         Intent(Intent),
+        AuctionIntent(AuctionIntent),
         SubscribeTopic(SubscribeTopic),
     }
 
@@ -1048,11 +1056,13 @@ pub mod cmds {
         }
     }
 
+
+
     #[derive(Clone, Debug)]
     pub struct Intent(pub args::Intent);
 
     impl SubCmd for Intent {
-        const CMD: &'static str = "intent";
+        const CMD: &'static str = "token-intent";
 
         fn parse(matches: &ArgMatches) -> Option<Self> {
             matches
@@ -1064,6 +1074,25 @@ pub mod cmds {
             App::new(Self::CMD)
                 .about("Send an intent.")
                 .add_args::<args::Intent>()
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct AuctionIntent(pub args::AuctionIntent);
+
+    impl SubCmd for AuctionIntent {
+        const CMD: &'static str = "auction-intent";
+
+        fn parse(matches: &ArgMatches) -> Option<Self> {
+            matches
+                .subcommand_matches(Self::CMD)
+                .map(|matches| AuctionIntent(args::AuctionIntent::parse(matches)))
+        }
+
+        fn def() -> App {
+            App::new(Self::CMD)
+                .about("Send an auction intent.")
+                .add_args::<args::AuctionIntent>()
         }
     }
 
@@ -1194,7 +1223,7 @@ pub mod args {
 
     use anoma::types::address::Address;
     use anoma::types::chain::{ChainId, ChainIdPrefix};
-    use anoma::types::intent::{DecimalWrapper, Exchange};
+    use anoma::types::intent::{Auction, DecimalWrapper, Exchange};
     use anoma::types::key::*;
     use anoma::types::storage::Epoch;
     use anoma::types::token;
@@ -1899,6 +1928,44 @@ pub mod args {
         }
     }
 
+    /// Helper struct for generating intents
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct AuctionDefinition {
+        /// The source address
+        pub addr: String,
+        /// The token to be sold
+        pub token_sell: String,
+        /// The token to be bought
+        pub token_buy: String,
+        /// The amount of tokens to be sold
+        pub amount: String,
+    }
+
+    impl TryFrom<AuctionDefinition> for Auction {
+        type Error = &'static str;
+
+        fn try_from(
+            value: AuctionDefinition,
+        ) -> Result<Auction, Self::Error> {
+
+            let addr = Address::decode(value.addr)
+                .expect("Addr should be a valid address");
+            let token_buy = Address::decode(value.token_buy)
+                .expect("Token_buy should be a valid address");
+            let token_sell = Address::decode(value.token_sell)
+                .expect("Token_sell should be a valid address");
+            let amount = token::Amount::from_str(&value.amount)
+                .expect("Amount of tokens must be convertible to number");
+
+            Ok(Auction {
+                addr,
+                token_sell,
+                amount,
+                token_buy,
+            })
+        }
+    }
+
     /// Query PoS bond(s)
     #[derive(Clone, Debug)]
     pub struct QueryBonds {
@@ -2098,6 +2165,95 @@ pub mod args {
                     )
                     .conflicts_with_all(&[NODE_OPT.name, TOPIC.name]),
             )
+        }
+    }
+
+    /// Intent arguments
+    #[derive(Clone, Debug)]
+    pub struct AuctionIntent {
+        /// Gossip node address
+        pub node_addr: Option<String>,
+        /// Intent topic
+        pub topic: Option<String>,
+        /// Signing key
+        pub signing_key: Option<WalletKeypair>,
+        /// Exchanges description
+        pub auctions: Vec<Auction>,
+        /// The address of the ledger node as host:port
+        pub ledger_address: TendermintAddress,
+        /// Print output to stdout
+        pub to_stdout: bool,
+    }
+
+    impl Args for AuctionIntent {
+        fn parse(matches: &ArgMatches) -> Self {
+            let node_addr = NODE_OPT.parse(matches);
+            let data_path = DATA_PATH.parse(matches);
+            let signing_key = SIGNING_KEY_OPT.parse(matches);
+            let to_stdout = TO_STDOUT.parse(matches);
+            let topic = TOPIC_OPT.parse(matches);
+
+            let file = File::open(&data_path).expect("File must exist.");
+            let auction_definitions: Vec<AuctionDefinition> =
+                serde_json::from_reader(file)
+                    .expect("JSON was not well-formatted");
+
+            let auctions: Vec<Auction> = auction_definitions
+                .iter()
+                .map(|item| {
+                    Auction::try_from(item.clone()).expect(
+                        "Conversion from ExchangeDefinition to Exchange \
+                         should not fail.",
+                    )
+                })
+                .collect();
+            let ledger_address = LEDGER_ADDRESS_DEFAULT.parse(matches);
+
+            Self {
+                node_addr,
+                topic,
+                signing_key,
+                auctions,
+                ledger_address,
+                to_stdout,
+            }
+        }
+
+        fn def(app: App) -> App {
+            app.arg(
+                NODE_OPT
+                    .def()
+                    .about("The gossip node address.")
+                    .conflicts_with(TO_STDOUT.name),
+            )
+                .arg(DATA_PATH.def().about(
+                    "The data of the intent, that contains all value necessary \
+                 for the matchmaker.",
+                ))
+                .arg(
+                    SIGNING_KEY_OPT
+                        .def()
+                        .about(
+                            "Sign the intent with the key for the given public \
+                         key, public key hash or alias from your wallet.",
+                        )
+                )
+                .arg(
+                    TOPIC_OPT
+                        .def()
+                        .about("The subnetwork where the intent should be sent to.")
+                        .conflicts_with(TO_STDOUT.name),
+                )
+                .arg(
+                    TO_STDOUT
+                        .def()
+                        .about(
+                            "Echo the serialized intent to stdout. Note that with \
+                         this option, the intent won't be submitted to the \
+                         intent gossiper RPC.",
+                        )
+                        .conflicts_with_all(&[NODE_OPT.name, TOPIC.name]),
+                )
         }
     }
 
