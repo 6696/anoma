@@ -2202,7 +2202,7 @@ pub mod args {
                 .iter()
                 .map(|item| {
                     Auction::try_from(item.clone()).expect(
-                        "Conversion from ExchangeDefinition to Exchange \
+                        "Conversion from AuctionDefinition to Auction \
                          should not fail.",
                     )
                 })
@@ -2238,6 +2238,7 @@ pub mod args {
                          key, public key hash or alias from your wallet.",
                         )
                 )
+                .arg(LEDGER_ADDRESS_DEFAULT.def().about(LEDGER_ADDRESS_ABOUT))
                 .arg(
                     TOPIC_OPT
                         .def()
