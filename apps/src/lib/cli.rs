@@ -1939,6 +1939,8 @@ pub mod args {
         pub token_buy: String,
         /// The amount of tokens to be sold
         pub amount: String,
+        /// The block height at which the auction ends
+        pub auction_end: u64
     }
 
     impl TryFrom<AuctionDefinition> for Auction {
