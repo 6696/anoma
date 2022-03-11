@@ -3953,6 +3953,7 @@ dependencies = [
  "rust_decimal",
  "serde 1.0.136",
  "serde_json",
+ "sha2 0.10.2",
  "tokio",
 ]
 

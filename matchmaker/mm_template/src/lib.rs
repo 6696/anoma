@@ -1,7 +1,7 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use anoma::types::address::Address;
-use anoma::types::intent::{Exchange, FungibleTokenIntent, MatchedExchanges};
+use anoma::types::intent::{Auction, AuctionIntent, Exchange, FungibleTokenIntent, MatchedExchanges};
 use anoma::types::matchmaker::{AddIntent, AddIntentResult};
 use anoma::types::token;
 use anoma_macros::Matchmaker;
@@ -14,23 +14,35 @@ use petgraph::graph::{node_index, DiGraph, NodeIndex};
 use petgraph::visit::{depth_first_search, Control, DfsEvent, EdgeRef};
 use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
+use sha2::{Sha256};
 
 #[derive(Default, Matchmaker)]
-struct TokenExchange {
-    graph: DiGraph<ExchangeNode, Address>,
+struct AuctionMaker {
+    auctions: HashMap<Sha256::Digest, anoma::proto::Signed<Auction>>,
 }
 
-impl AddIntent for TokenExchange {
+impl AddIntent for AuctionMaker {
     fn add_intent(
         &mut self,
         intent_id: &Vec<u8>,
         intent_data: &Vec<u8>,
     ) -> AddIntentResult {
         let intent = decode_intent_data(&intent_data[..]);
-        let exchanges = intent.data.exchange.clone();
+        let auctions = intent.data.auctions.clone();
 
+        //TODO: check existing auctions, if their time is over and they need clearing
+        for x in &auctions {
+            println!("data: {:?}", x.data);
+            println!("signature: {:?}", x.sig);
+
+            println!("auction_end: {:?}", x.data.auction_end);
+            // println!("current height: {:?}", x.data.auction_end);
+            //TODO: get current height
+        }
+
+        //TODO: add new auctions if intent is AuctionIntent
         println!("trying to match new intent");
-        exchanges.into_iter().for_each(|exchange| {
+        auctions.into_iter().for_each(|exchange| {
             add_intent_node(
                 &mut self.graph,
                 intent_id.to_vec(),
@@ -38,12 +50,28 @@ impl AddIntent for TokenExchange {
                 intent.clone(),
             )
         });
-        let (tx, matched_intents) = match try_match(&mut self.graph) {
-            Some((tx, matched_intents)) => (Some(tx), Some(matched_intents)),
+        ///////////
+
+        //TODO: add new bid if intent is BidIntent
+        println!("trying to match new intent");
+        auctions.into_iter().for_each(|exchange| {
+            add_intent_node(
+                &mut self.graph,
+                intent_id.to_vec(),
+                exchange,
+                intent.clone(),
+            )
+        });
+        ///////////
+
+
+        let (tx_data, matched_intents) = match try_match(&mut self.graph) {
+            Some((tx_data, matched_intents)) => (Some(tx_data), Some(matched_intents)),
             None => (None, None),
         };
+
         AddIntentResult {
-            tx,
+            tx: tx_data,
             matched_intents,
         }
     }
@@ -367,6 +395,6 @@ fn create_transfer(
 
 fn decode_intent_data(
     bytes: &[u8],
-) -> anoma::proto::Signed<FungibleTokenIntent> {
-    anoma::proto::Signed::<FungibleTokenIntent>::try_from_slice(bytes).unwrap()
+) -> anoma::proto::Signed<AuctionIntent> {
+    anoma::proto::Signed::<AuctionIntent>::try_from_slice(bytes).unwrap()
 }
