@@ -1225,7 +1225,7 @@ pub mod args {
     use anoma::types::chain::{ChainId, ChainIdPrefix};
     use anoma::types::intent::{Auction, DecimalWrapper, Exchange};
     use anoma::types::key::*;
-    use anoma::types::storage::Epoch;
+    use anoma::types::storage::{BlockHeight, Epoch};
     use anoma::types::token;
     use anoma::types::transaction::GasLimit;
     use libp2p::Multiaddr;
@@ -1940,7 +1940,7 @@ pub mod args {
         /// The amount of tokens to be sold
         pub amount: String,
         /// The block height at which the auction ends
-        pub auction_end: u64
+        pub auction_end: String
     }
 
     impl TryFrom<AuctionDefinition> for Auction {
@@ -1957,13 +1957,15 @@ pub mod args {
             let token_sell = Address::decode(value.token_sell)
                 .expect("Token_sell should be a valid address");
             let amount = token::Amount::from_str(&value.amount)
-                .expect("Amount of tokens must be convertible to number");
+                .expect("Amount of tokens must be convertable to number");
+            let auction_end = BlockHeight(value.auction_end.parse::<u64>().expect("End of the auction must be convertable to number"));
 
             Ok(Auction {
                 addr,
                 token_sell,
                 amount,
                 token_buy,
+                auction_end,
             })
         }
     }

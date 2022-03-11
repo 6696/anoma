@@ -3942,11 +3942,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "mm_template"
+name = "mm_auction"
 version = "0.4.0"
 dependencies = [
  "anoma",
  "anoma_macros",
+ "borsh",
+ "good_lp",
+ "petgraph 0.5.1",
+ "rust_decimal",
+ "serde 1.0.136",
+ "serde_json",
  "tokio",
 ]
 

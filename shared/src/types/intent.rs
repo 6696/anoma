@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::proto::Signed;
 use crate::types::address::Address;
-use crate::types::storage::{DbKeySeg, Key, KeySeg};
+use crate::types::storage::{BlockHeight, DbKeySeg, Key, KeySeg};
 use crate::types::token;
 
 /// A simple intent for fungible token trade
@@ -103,6 +103,8 @@ pub struct Auction {
     pub token_buy: Address,
     /// The amount of token to be put on auction
     pub amount: token::Amount,
+    /// The amount of token to be put on auction
+    pub auction_end: BlockHeight
 }
 
 /// These are transfers crafted from matched [`Exchange`]s created by a
