@@ -1988,7 +1988,9 @@ pub mod args {
                 Some(x) => Some(PlaceBid {
                     amount: token::Amount::from_str(&x.amount)
                         .expect("Amount of tokens must be convertable to number"),
-                    auction_id: x.auction_id.expect("Amount of tokens must be convertable to number")
+                    //auction_id: x.auction_id.expect("Amount of tokens must be convertable to number"),
+                    auction_id: x.auction_id
+
                 }),
                 None    => None,
             };
