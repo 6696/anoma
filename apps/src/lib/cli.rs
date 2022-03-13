@@ -1223,7 +1223,7 @@ pub mod args {
 
     use anoma::types::address::Address;
     use anoma::types::chain::{ChainId, ChainIdPrefix};
-    use anoma::types::intent::{Auction, DecimalWrapper, Exchange};
+    use anoma::types::intent::{Auction, CreateAuction, DecimalWrapper, Exchange, PlaceBid};
     use anoma::types::key::*;
     use anoma::types::storage::{BlockHeight, Epoch};
     use anoma::types::token;
@@ -1930,9 +1930,7 @@ pub mod args {
 
     /// Helper struct for generating intents
     #[derive(Debug, Clone, Deserialize)]
-    pub struct AuctionDefinition {
-        /// The source address
-        pub addr: String,
+    pub struct CreateAuctionDefinition {
         /// The token to be sold
         pub token_sell: String,
         /// The token to be bought
@@ -1941,6 +1939,26 @@ pub mod args {
         pub amount: String,
         /// The block height at which the auction ends
         pub auction_end: String
+    }
+
+    /// Helper struct for generating intents
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct PlaceBidDefinition {
+        /// The bid
+        pub amount: String,
+        /// The auction id
+        pub auction_id: String
+    }
+
+    /// Helper struct for generating intents
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct AuctionDefinition {
+        /// The source address
+        pub addr: String,
+        /// The token to be sold
+        pub create_auction: Option<CreateAuctionDefinition>,
+        /// The token to be bought
+        pub place_bid: Option<PlaceBidDefinition>,
     }
 
     impl TryFrom<AuctionDefinition> for Auction {
@@ -1952,20 +1970,33 @@ pub mod args {
 
             let addr = Address::decode(value.addr)
                 .expect("Addr should be a valid address");
-            let token_buy = Address::decode(value.token_buy)
-                .expect("Token_buy should be a valid address");
-            let token_sell = Address::decode(value.token_sell)
-                .expect("Token_sell should be a valid address");
-            let amount = token::Amount::from_str(&value.amount)
-                .expect("Amount of tokens must be convertable to number");
-            let auction_end = BlockHeight(value.auction_end.parse::<u64>().expect("End of the auction must be convertable to number"));
+
+            let create_auction: Option<CreateAuction> = match value.create_auction {
+                Some(x) => Some(CreateAuction {
+                    token_buy: Address::decode(x.token_buy)
+                        .expect("Token_buy should be a valid address"),
+                    token_sell: Address::decode(x.token_sell)
+                        .expect("Token_sell should be a valid address"),
+                    amount: token::Amount::from_str(&x.amount)
+                        .expect("Amount of tokens must be convertable to number"),
+                    auction_end: BlockHeight(x.auction_end.parse::<u64>().expect("End of the auction must be convertable to number"))
+                }),
+                None    => None,
+            };
+
+            let place_bid: Option<PlaceBid> = match value.place_bid {
+                Some(x) => Some(PlaceBid {
+                    amount: token::Amount::from_str(&x.amount)
+                        .expect("Amount of tokens must be convertable to number"),
+                    auction_id: x.auction_id.expect("Amount of tokens must be convertable to number")
+                }),
+                None    => None,
+            };
 
             Ok(Auction {
                 addr,
-                token_sell,
-                amount,
-                token_buy,
-                auction_end,
+                create_auction,
+                place_bid
             })
         }
     }
