@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use anoma::types::address::Address;
-use anoma::types::intent::{Auction, AuctionIntent, Exchange, FungibleTokenIntent, MatchedExchanges};
+use anoma::types::intent::{Auction, AuctionIntent, CreateAuction, Exchange, FungibleTokenIntent, MatchedExchanges, PlaceBid};
 use anoma::types::matchmaker::{AddIntent, AddIntentResult};
 use anoma::types::token;
 use anoma_macros::Matchmaker;
@@ -20,7 +20,7 @@ use sha2::{Sha256};
 
 #[derive(Default, Matchmaker)]
 struct AuctionMaker {
-    auctions: HashMap<Sha256::Digest, anoma::proto::Signed<Auction>>,
+    auctions_map: HashMap<String, AuctionEntry>,
 }
 
 impl AddIntent for AuctionMaker {
@@ -34,7 +34,8 @@ impl AddIntent for AuctionMaker {
 
         println!("intent_id: {:?}", intent_id);
 
-        //TODO: check existing auctions, if their time is over and they need clearing
+        //TODO: check if intent is defined for an existing auction, and resolve it, if
+        // time is over
         for x in &auctions {
             println!("data: {:?}", x.data);
             println!("signature: {:?}", x.sig);
@@ -44,42 +45,39 @@ impl AddIntent for AuctionMaker {
             println!("place_bid: {:?}", x.data.place_bid);
             // println!("current height: {:?}", get_block_height());
             //TODO: get current height
+
+            return AddIntentResult {
+                tx: None,
+                matched_intents: None,
+            };
         }
 
-        // //TODO: add new auctions if intent is AuctionIntent
-        // println!("trying to match new intent");
-        // auctions.into_iter().for_each(|exchange| {
-        //     add_intent_node(
-        //         &mut self.graph,
-        //         intent_id.to_vec(),
-        //         exchange,
-        //         intent.clone(),
-        //     )
-        // });
-        // ///////////
-        //
-        // //TODO: add new bid if intent is BidIntent
-        // println!("trying to match new intent");
-        // auctions.into_iter().for_each(|exchange| {
-        //     add_intent_node(
-        //         &mut self.graph,
-        //         intent_id.to_vec(),
-        //         exchange,
-        //         intent.clone(),
-        //     )
-        // });
-        // ///////////
-        //
-        //
-        // let (tx_data, matched_intents) = match try_match(&mut self.graph) {
-        //     Some((tx_data, matched_intents)) => (Some(tx_data), Some(matched_intents)),
-        //     None => (None, None),
-        // };
-        //
-        // AddIntentResult {
-        //     tx: tx_data,
-        //     matched_intents,
-        // }
+        //TODO: add new auctions if intent is AuctionIntent
+        println!("trying to add create_auction intents");
+        auctions.into_iter().for_each(|auction| {
+            if auction.data.create_auction.is_some() {
+                add_auction_entry(
+                    &mut self.auctions_map,
+                    intent_id.to_vec(),
+                    auction,
+                    intent.clone(),
+                )
+            }
+        });
+
+        //TODO: add new bid if intent is BidIntent
+        println!("trying to add place_bid intents");
+        auctions.into_iter().for_each(|auction| {
+            if auction.data.place_bid.is_some() {
+                add_bid_entry(
+                    &mut self.auctions_map,
+                    intent_id.to_vec(),
+                    auction,
+                    intent.clone(),
+                )
+            }
+        });
+
         AddIntentResult {
             tx: None,
             matched_intents: None,
@@ -87,43 +85,79 @@ impl AddIntent for AuctionMaker {
     }
 }
 
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// struct ExchangeNode {
-//     id: Vec<u8>,
-//     exchange: anoma::proto::Signed<Exchange>,
-//     intent: anoma::proto::Signed<FungibleTokenIntent>,
-// }
-//
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BidEntry {
+    id: Vec<u8>,
+    place_bid: PlaceBid,
+    intent: anoma::proto::Signed<AuctionIntent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AuctionEntry {
+    id: Vec<u8>,
+    create_auction: CreateAuction,
+    intent: anoma::proto::Signed<AuctionIntent>,
+    bids: Vec<BidEntry>
+}
+
+// ???
 // impl PartialEq for ExchangeNode {
 //     fn eq(&self, other: &Self) -> bool {
 //         self.id == other.id
 //     }
 // }
-//
-// /// Add a new node to the graph for the intent
-// fn add_intent_node(
-//     graph: &mut DiGraph<ExchangeNode, Address>,
-//     id: Vec<u8>,
-//     exchange: anoma::proto::Signed<Exchange>,
-//     intent: anoma::proto::Signed<FungibleTokenIntent>,
-// ) {
-//     let new_node = ExchangeNode {
-//         id,
-//         exchange,
-//         intent,
-//     };
-//     let new_node_index = graph.add_node(new_node.clone());
-//     let (connect_sell, connect_buy) = find_nodes_to_update(graph, &new_node);
-//     let sell_edge = new_node.exchange.data.token_sell;
-//     let buy_edge = new_node.exchange.data.token_buy;
-//     for node_index in connect_sell {
-//         graph.update_edge(new_node_index, node_index, sell_edge.clone());
-//     }
-//     for node_index in connect_buy {
-//         graph.update_edge(node_index, new_node_index, buy_edge.clone());
-//     }
-// }
-//
+
+/// Add a new node to the graph for the intent
+fn add_auction_entry(
+    auctions_map: &mut HashMap<String, AuctionEntry>,
+    id: Vec<u8>,
+    auction: anoma::proto::Signed<Auction>,
+    intent: anoma::proto::Signed<AuctionIntent>,
+) {
+    let new_entry = AuctionEntry {
+        id,
+        create_auction: auction.create_auction.clone(),
+        intent,
+        bids: vec![]
+    };
+
+    // create a Sha256 object
+    let mut hasher = Sha256::new();
+    // write input message
+    hasher.update(new_entry.unwrap());
+    // read hash digest and consume hasher
+    let key = hasher.finalize();
+
+    if auctions_map.contains_key(key[..].encode_hex::<String>()) {
+        println!("Hashmap already contains entry with key: {:?}.", key[..]);
+        return;
+    }
+
+    auctions_map.insert(key[..], new_entry.clone());
+}
+
+/// Add a new node to the graph for the intent
+fn add_bid_entry(
+    auctions_map: &mut HashMap<String, AuctionEntry>,
+    id: Vec<u8>,
+    auction: anoma::proto::Signed<Auction>,
+    intent: anoma::proto::Signed<AuctionIntent>,
+) {
+    let new_entry = BidEntry {
+        id,
+        place_bid: auction.place_bid.clone(),
+        intent,
+    };
+
+    if auctions_map.contains_key(&new_entry.place_bid.auction_id) {
+        // println!("Hashmap already contains entry with key: {:?}.", key[..]);
+        // TODO:
+        return;
+    } else {
+        println!("No such auction exist with id: {:?}.", new_entry.place_bid.auction_id);
+    }
+}
+
 // /// Find the nodes that are matching the intent on sell side and buy side.
 // fn find_nodes_to_update(
 //     graph: &DiGraph<ExchangeNode, Address>,
@@ -213,195 +247,195 @@ impl AddIntent for AuctionMaker {
 //     }
 //     None
 // }
-//
-// /// Prepare the transaction's data from the matched intents
-// fn prepare_tx_data(
-//     graph: &DiGraph<ExchangeNode, Address>,
-//     matched_intent_indices: &[NodeIndex],
-// ) -> Option<Vec<u8>> {
-//     println!(
-//         "found match; creating tx with {:?} nodes",
-//         matched_intent_indices.len()
-//     );
-//     let matched_intents = sort_intents(graph, matched_intent_indices);
-//     let amounts = compute_amounts(graph, &matched_intents);
-//
-//     match amounts {
-//         Ok(res) => {
-//             println!(
-//                 "amounts: {}",
-//                 res.values()
-//                     .map(|x| x.to_string())
-//                     .collect::<Vec<String>>()
-//                     .join(", ")
-//             );
-//             let mut matched_intents = matched_intents.into_iter();
-//             let first_node = matched_intents.next().map(|i| &graph[i]).unwrap();
-//             let mut tx_data = MatchedExchanges::empty();
-//
-//             let last_node =
-//                 matched_intents.fold(first_node, |prev_node, intent_index| {
-//                     let node = &graph[intent_index];
-//                     let exchanged_amount =
-//                         *res.get(&node.exchange.data).unwrap();
-//                     println!(
-//                         "crafting transfer: {}, {}, {}",
-//                         node.exchange.data.addr.clone(),
-//                         prev_node.exchange.data.addr.clone(),
-//                         exchanged_amount
-//                     );
-//                     tx_data.transfers.insert(create_transfer(
-//                         node,
-//                         prev_node,
-//                         exchanged_amount, /* safe as we have as many amounts
-//                                            * as intents */
-//                     ));
-//                     tx_data.exchanges.insert(
-//                         node.exchange.data.addr.clone(),
-//                         node.exchange.clone(),
-//                     );
-//                     tx_data.intents.insert(
-//                         node.exchange.data.addr.clone(),
-//                         node.intent.clone(),
-//                     );
-//                     node
-//                 });
-//             let last_amount = *res.get(&first_node.exchange.data).unwrap();
-//             println!(
-//                 "crafting transfer: {}, {}, {}",
-//                 first_node.exchange.data.addr.clone(),
-//                 last_node.exchange.data.addr.clone(),
-//                 last_amount
-//             );
-//             tx_data.transfers.insert(create_transfer(
-//                 first_node,
-//                 last_node,
-//                 last_amount,
-//             ));
-//             tx_data.exchanges.insert(
-//                 first_node.exchange.data.addr.clone(),
-//                 first_node.exchange.clone(),
-//             );
-//             tx_data.intents.insert(
-//                 first_node.exchange.data.addr.clone(),
-//                 first_node.intent.clone(),
-//             );
-//             println!("tx data: {:?}", tx_data.transfers);
-//             Some(tx_data.try_to_vec().unwrap())
-//         }
-//         Err(err) => {
-//             println!("Invalid exchange: {}.", err);
-//             None
-//         }
-//     }
-// }
-//
-// fn compute_amounts(
-//     graph: &DiGraph<ExchangeNode, Address>,
-//     cycle_intents: &[NodeIndex],
-// ) -> Result<HashMap<Exchange, token::Amount>, ResolutionError> {
-//     let nodes = graph
-//         .raw_nodes()
-//         .iter()
-//         .map(|x| x.weight.exchange.data.clone())
-//         .collect::<Vec<Exchange>>();
-//     let mut vars = variables!();
-//
-//     let mut var_set: HashMap<NodeIndex, VariableDefinition> = HashMap::new();
-//
-//     let mut intent_graph = graph.filter_map(
-//         |node_index, node| {
-//             if cycle_intents.contains(&node_index) {
-//                 let edges = graph.neighbors(node_index);
-//
-//                 *edges
-//                     .map(|target_node_index| {
-//                         let target = graph[target_node_index].clone();
-//
-//                         let variable_definition = variable();
-//                         var_set.insert(node_index, variable_definition.clone());
-//
-//                         let var_def = variable_definition
-//                             .min(target.exchange.data.min_buy)
-//                             .max(node.exchange.data.max_sell);
-//
-//                         let var = vars.add(var_def);
-//
-//                         Some((var, node))
-//                     })
-//                     .collect::<Vec<Option<(Variable, &ExchangeNode)>>>()
-//                     .get(0)
-//                     .unwrap()
-//             } else {
-//                 None
-//             }
-//         },
-//         |_edge_index, edge| Some(edge),
-//     );
-//
-//     let variables_iter = vars.iter_variables_with_def().map(|(var, _)| var);
-//     let obj_function: Expression = variables_iter.sum();
-//     let mut model = vars.maximise(obj_function).using(default_solver);
-//
-//     let mut constrains = Vec::new();
-//
-//     // we need to invert the graph otherwise we are not able to build the
-//     // constrains
-//     intent_graph.reverse();
-//
-//     let start = node_index(0);
-//     depth_first_search(&intent_graph, Some(start), |event| {
-//         if let DfsEvent::Discover(index, _time) = event {
-//             let edges = graph.edges(index);
-//
-//             edges.for_each(|edge| {
-//                 let source = intent_graph[edge.source()];
-//                 let target = intent_graph[edge.target()];
-//
-//                 constrains.push((
-//                     source.0,
-//                     target.0,
-//                     target.1.exchange.data.rate_min.0.to_f64().unwrap(),
-//                 ));
-//             });
-//         }
-//         Control::<()>::Continue
-//     });
-//
-//     for constrain in constrains.iter() {
-//         let constrain = constraint!(constrain.0 >= constrain.1 * constrain.2);
-//         model = model.with(constrain);
-//     }
-//
-//     match model.solve() {
-//         Ok(solution) => {
-//             let mut amount_map = HashMap::new();
-//             let amounts = solution
-//                 .into_inner()
-//                 .iter()
-//                 .map(|(_, amount)| token::Amount::from(*amount))
-//                 .collect::<Vec<_>>();
-//             nodes.iter().enumerate().for_each(|(index, exchange)| {
-//                 amount_map.insert(exchange.clone(), amounts[index]);
-//             });
-//             Ok(amount_map)
-//         }
-//         Err(error) => Err(error),
-//     }
-// }
-//
-// fn create_transfer(
-//     from_node: &ExchangeNode,
-//     to_node: &ExchangeNode,
-//     amount: token::Amount,
-// ) -> token::Transfer {
-//     token::Transfer {
-//         source: from_node.exchange.data.addr.clone(),
-//         target: to_node.exchange.data.addr.clone(),
-//         token: to_node.exchange.data.token_buy.clone(),
-//         amount,
-//     }
-// }
+
+/// Prepare the transaction's data from the matched intents
+fn prepare_tx_data(
+    graph: &DiGraph<ExchangeNode, Address>,
+    matched_intent_indices: &[NodeIndex],
+) -> Option<Vec<u8>> {
+    println!(
+        "found match; creating tx with {:?} nodes",
+        matched_intent_indices.len()
+    );
+    let matched_intents = sort_intents(graph, matched_intent_indices);
+    let amounts = compute_amounts(graph, &matched_intents);
+
+    match amounts {
+        Ok(res) => {
+            println!(
+                "amounts: {}",
+                res.values()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            );
+            let mut matched_intents = matched_intents.into_iter();
+            let first_node = matched_intents.next().map(|i| &graph[i]).unwrap();
+            let mut tx_data = MatchedExchanges::empty();
+
+            let last_node =
+                matched_intents.fold(first_node, |prev_node, intent_index| {
+                    let node = &graph[intent_index];
+                    let exchanged_amount =
+                        *res.get(&node.exchange.data).unwrap();
+                    println!(
+                        "crafting transfer: {}, {}, {}",
+                        node.exchange.data.addr.clone(),
+                        prev_node.exchange.data.addr.clone(),
+                        exchanged_amount
+                    );
+                    tx_data.transfers.insert(create_transfer(
+                        node,
+                        prev_node,
+                        exchanged_amount, /* safe as we have as many amounts
+                                           * as intents */
+                    ));
+                    tx_data.exchanges.insert(
+                        node.exchange.data.addr.clone(),
+                        node.exchange.clone(),
+                    );
+                    tx_data.intents.insert(
+                        node.exchange.data.addr.clone(),
+                        node.intent.clone(),
+                    );
+                    node
+                });
+            let last_amount = *res.get(&first_node.exchange.data).unwrap();
+            println!(
+                "crafting transfer: {}, {}, {}",
+                first_node.exchange.data.addr.clone(),
+                last_node.exchange.data.addr.clone(),
+                last_amount
+            );
+            tx_data.transfers.insert(create_transfer(
+                first_node,
+                last_node,
+                last_amount,
+            ));
+            tx_data.exchanges.insert(
+                first_node.exchange.data.addr.clone(),
+                first_node.exchange.clone(),
+            );
+            tx_data.intents.insert(
+                first_node.exchange.data.addr.clone(),
+                first_node.intent.clone(),
+            );
+            println!("tx data: {:?}", tx_data.transfers);
+            Some(tx_data.try_to_vec().unwrap())
+        }
+        Err(err) => {
+            println!("Invalid exchange: {}.", err);
+            None
+        }
+    }
+}
+
+fn compute_amounts(
+    graph: &DiGraph<ExchangeNode, Address>,
+    cycle_intents: &[NodeIndex],
+) -> Result<HashMap<Exchange, token::Amount>, ResolutionError> {
+    let nodes = graph
+        .raw_nodes()
+        .iter()
+        .map(|x| x.weight.exchange.data.clone())
+        .collect::<Vec<Exchange>>();
+    let mut vars = variables!();
+
+    let mut var_set: HashMap<NodeIndex, VariableDefinition> = HashMap::new();
+
+    let mut intent_graph = graph.filter_map(
+        |node_index, node| {
+            if cycle_intents.contains(&node_index) {
+                let edges = graph.neighbors(node_index);
+
+                *edges
+                    .map(|target_node_index| {
+                        let target = graph[target_node_index].clone();
+
+                        let variable_definition = variable();
+                        var_set.insert(node_index, variable_definition.clone());
+
+                        let var_def = variable_definition
+                            .min(target.exchange.data.min_buy)
+                            .max(node.exchange.data.max_sell);
+
+                        let var = vars.add(var_def);
+
+                        Some((var, node))
+                    })
+                    .collect::<Vec<Option<(Variable, &ExchangeNode)>>>()
+                    .get(0)
+                    .unwrap()
+            } else {
+                None
+            }
+        },
+        |_edge_index, edge| Some(edge),
+    );
+
+    let variables_iter = vars.iter_variables_with_def().map(|(var, _)| var);
+    let obj_function: Expression = variables_iter.sum();
+    let mut model = vars.maximise(obj_function).using(default_solver);
+
+    let mut constrains = Vec::new();
+
+    // we need to invert the graph otherwise we are not able to build the
+    // constrains
+    intent_graph.reverse();
+
+    let start = node_index(0);
+    depth_first_search(&intent_graph, Some(start), |event| {
+        if let DfsEvent::Discover(index, _time) = event {
+            let edges = graph.edges(index);
+
+            edges.for_each(|edge| {
+                let source = intent_graph[edge.source()];
+                let target = intent_graph[edge.target()];
+
+                constrains.push((
+                    source.0,
+                    target.0,
+                    target.1.exchange.data.rate_min.0.to_f64().unwrap(),
+                ));
+            });
+        }
+        Control::<()>::Continue
+    });
+
+    for constrain in constrains.iter() {
+        let constrain = constraint!(constrain.0 >= constrain.1 * constrain.2);
+        model = model.with(constrain);
+    }
+
+    match model.solve() {
+        Ok(solution) => {
+            let mut amount_map = HashMap::new();
+            let amounts = solution
+                .into_inner()
+                .iter()
+                .map(|(_, amount)| token::Amount::from(*amount))
+                .collect::<Vec<_>>();
+            nodes.iter().enumerate().for_each(|(index, exchange)| {
+                amount_map.insert(exchange.clone(), amounts[index]);
+            });
+            Ok(amount_map)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn create_transfer(
+    from_node: &ExchangeNode,
+    to_node: &ExchangeNode,
+    amount: token::Amount,
+) -> token::Transfer {
+    token::Transfer {
+        source: from_node.exchange.data.addr.clone(),
+        target: to_node.exchange.data.addr.clone(),
+        token: to_node.exchange.data.token_buy.clone(),
+        amount,
+    }
+}
 
 fn decode_intent_data(
     bytes: &[u8],
