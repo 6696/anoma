@@ -46,10 +46,16 @@ impl AddIntent for AuctionMaker {
             // println!("current height: {:?}", get_block_height());
             //TODO: get current height
 
-            return AddIntentResult {
-                tx: None,
-                matched_intents: None,
-            };
+            let result = try_resolve_auction(
+                &mut self.auctions_map,
+                intent_id.to_vec(),
+                auction,
+                intent.clone(),
+            );
+
+            if result.is_some() {
+                return result.unwrap();
+            }
         }
 
         //TODO: add new auctions if intent is AuctionIntent
@@ -97,7 +103,7 @@ struct AuctionEntry {
     id: Vec<u8>,
     create_auction: CreateAuction,
     intent: anoma::proto::Signed<AuctionIntent>,
-    bids: Vec<BidEntry>
+    bids: Vec<BidEntry>,
 }
 
 // ???
@@ -118,7 +124,7 @@ fn add_auction_entry(
         id,
         create_auction: auction.create_auction.clone(),
         intent,
-        bids: vec![]
+        bids: vec![],
     };
 
     // create a Sha256 object
@@ -155,6 +161,30 @@ fn add_bid_entry(
         return;
     } else {
         println!("No such auction exist with id: {:?}.", new_entry.place_bid.auction_id);
+    }
+}
+
+/// Add a new node to the graph for the intent
+fn try_resolve_auction(
+    auctions_map: &mut HashMap<String, AuctionEntry>,
+    id: Vec<u8>,
+    auction: anoma::proto::Signed<Auction>,
+    intent: anoma::proto::Signed<AuctionIntent>,
+) -> Option<AddIntentResult> {
+    let new_entry = BidEntry {
+        id,
+        place_bid: auction.place_bid.clone(),
+        intent,
+    };
+
+    return if auctions_map.contains_key(&new_entry.place_bid.auction_id) {
+        // TODO:
+        Some(AddIntentResult {
+            tx: None,
+            matched_intents: None,
+        })
+    } else {
+        None
     }
 }
 
