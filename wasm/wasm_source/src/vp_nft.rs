@@ -1,4 +1,5 @@
-use anoma_vm_env::vp_prelude::*;
+//! A VP for a nft.
+
 use anoma_vp_prelude::*;
 
 #[validity_predicate]
