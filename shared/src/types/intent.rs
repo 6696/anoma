@@ -102,7 +102,9 @@ pub struct CreateAuction {
     /// The amount of token to be put on auction
     pub amount: token::Amount,
     /// The amount of token to be put on auction
-    pub auction_end: BlockHeight
+    pub auction_start: u64,
+    /// The amount of token to be put on auction
+    pub auction_end: u64
 }
 
 #[derive(

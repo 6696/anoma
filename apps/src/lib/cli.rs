@@ -1938,6 +1938,8 @@ pub mod args {
         /// The amount of tokens to be sold
         pub amount: String,
         /// The block height at which the auction ends
+        pub auction_start: String,
+        /// The block height at which the auction ends
         pub auction_end: String
     }
 
@@ -1979,7 +1981,9 @@ pub mod args {
                         .expect("Token_sell should be a valid address"),
                     amount: token::Amount::from_str(&x.amount)
                         .expect("Amount of tokens must be convertable to number"),
-                    auction_end: BlockHeight(x.auction_end.parse::<u64>().expect("End of the auction must be convertable to number"))
+                    // auction_end: BlockHeight(x.auction_end.parse::<u64>().expect("End of the auction must be convertable to number"))
+                    auction_start: x.auction_start.parse::<u64>().expect("Start of the auction must be convertable to number"),
+                    auction_end: x.auction_end.parse::<u64>().expect("End of the auction must be convertable to number")
                 }),
                 None    => None,
             };
