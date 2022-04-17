@@ -91,7 +91,7 @@ clippy-fix:
 	$(cargo) +$(nightly) clippy --fix -Z unstable-options --all-targets --allow-dirty --allow-staged
 
 install: tendermint
-	$(cargo) build --release \
+	$(cargo) build --release --offline \
 		--manifest-path matchmaker/mm_token_exch/Cargo.toml && \
 	find "target/release/" -type f \
 		\( -name "$(mm).dll" -o -name "$(mm).dylib" -o -name "$(mm).so" \) \
