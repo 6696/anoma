@@ -49,6 +49,7 @@ pub mod cmds {
         TxTransfer(TxTransfer),
         TxUpdateVp(TxUpdateVp),
         Intent(Intent),
+        AuctionIntent(AuctionIntent),
     }
 
     impl Cmd for Anoma {
@@ -63,6 +64,7 @@ pub mod cmds {
                 .subcommand(TxTransfer::def())
                 .subcommand(TxUpdateVp::def())
                 .subcommand(Intent::def())
+                .subcommand(AuctionIntent::def())
         }
 
         fn parse(matches: &ArgMatches) -> Option<Self> {
@@ -76,6 +78,7 @@ pub mod cmds {
             let tx_transfer = SubCmd::parse(matches).map(Self::TxTransfer);
             let tx_update_vp = SubCmd::parse(matches).map(Self::TxUpdateVp);
             let intent = SubCmd::parse(matches).map(Self::Intent);
+            let auction_intent = SubCmd::parse(matches).map(Self::AuctionIntent);
             node.or(client)
                 .or(wallet)
                 .or(ledger)
@@ -85,6 +88,7 @@ pub mod cmds {
                 .or(tx_transfer)
                 .or(tx_update_vp)
                 .or(intent)
+                .or(auction_intent)
         }
     }
 
@@ -168,6 +172,7 @@ pub mod cmds {
                 .subcommand(QueryResult::def().display_order(3))
                 // Intents
                 .subcommand(Intent::def().display_order(4))
+                .subcommand(AuctionIntent::def().display_order(4))
                 .subcommand(SubscribeTopic::def().display_order(4))
                 // Utils
                 .subcommand(Utils::def().display_order(5))
@@ -192,6 +197,7 @@ pub mod cmds {
             let query_slashes = Self::parse_with_ctx(matches, QuerySlashes);
             let query_result = Self::parse_with_ctx(matches, QueryResult);
             let intent = Self::parse_with_ctx(matches, Intent);
+            let auction_intent = Self::parse_with_ctx(matches, AuctionIntent);
             let subscribe_topic = Self::parse_with_ctx(matches, SubscribeTopic);
             let utils = SubCmd::parse(matches).map(Self::WithoutContext);
             tx_custom
@@ -209,6 +215,7 @@ pub mod cmds {
                 .or(query_slashes)
                 .or(query_result)
                 .or(intent)
+                .or(auction_intent)
                 .or(subscribe_topic)
                 .or(utils)
         }
@@ -262,6 +269,7 @@ pub mod cmds {
         QuerySlashes(QuerySlashes),
         // Gossip cmds
         Intent(Intent),
+        AuctionIntent(AuctionIntent),
         SubscribeTopic(SubscribeTopic),
     }
 
@@ -991,7 +999,7 @@ pub mod cmds {
     pub struct Intent(pub args::Intent);
 
     impl SubCmd for Intent {
-        const CMD: &'static str = "intent";
+        const CMD: &'static str = "token-intent";
 
         fn parse(matches: &ArgMatches) -> Option<Self> {
             matches
@@ -1003,6 +1011,25 @@ pub mod cmds {
             App::new(Self::CMD)
                 .about("Send an intent.")
                 .add_args::<args::Intent>()
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct AuctionIntent(pub args::AuctionIntent);
+
+    impl SubCmd for AuctionIntent {
+        const CMD: &'static str = "auction-intent";
+
+        fn parse(matches: &ArgMatches) -> Option<Self> {
+            matches
+                .subcommand_matches(Self::CMD)
+                .map(|matches| AuctionIntent(args::AuctionIntent::parse(matches)))
+        }
+
+        fn def() -> App {
+            App::new(Self::CMD)
+                .about("Send an auction intent.")
+                .add_args::<args::AuctionIntent>()
         }
     }
 
@@ -1133,7 +1160,7 @@ pub mod args {
 
     use anoma::types::address::Address;
     use anoma::types::chain::{ChainId, ChainIdPrefix};
-    use anoma::types::intent::{DecimalWrapper, Exchange};
+    use anoma::types::intent::{Auction, CreateAuction, DecimalWrapper, Exchange, PlaceBid};
     use anoma::types::key::ed25519::PublicKey;
     use anoma::types::storage::Epoch;
     use anoma::types::token;
@@ -1768,6 +1795,85 @@ pub mod args {
         }
     }
 
+    /// Helper struct for generating intents
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct CreateAuctionDefinition {
+        /// The token to be sold
+        pub token_sell: String,
+        /// The token to be bought
+        pub token_buy: String,
+        /// The amount of tokens to be sold
+        pub amount: String,
+        /// The block height at which the auction ends
+        pub auction_start: String,
+        /// The block height at which the auction ends
+        pub auction_end: String
+    }
+
+    /// Helper struct for generating intents
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct PlaceBidDefinition {
+        /// The bid
+        pub amount: String,
+        /// The auction id
+        pub auction_id: String
+    }
+
+    /// Helper struct for generating intents
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct AuctionDefinition {
+        /// The source address
+        pub addr: String,
+        /// The token to be sold
+        pub create_auction: Option<CreateAuctionDefinition>,
+        /// The token to be bought
+        pub place_bid: Option<PlaceBidDefinition>,
+    }
+
+    impl TryFrom<AuctionDefinition> for Auction {
+        type Error = &'static str;
+
+        fn try_from(
+            value: AuctionDefinition,
+        ) -> Result<Auction, Self::Error> {
+
+            let addr = Address::decode(value.addr)
+                .expect("Addr should be a valid address");
+
+            let create_auction: Option<CreateAuction> = match value.create_auction {
+                Some(x) => Some(CreateAuction {
+                    token_buy: Address::decode(x.token_buy)
+                        .expect("Token_buy should be a valid address"),
+                    token_sell: Address::decode(x.token_sell)
+                        .expect("Token_sell should be a valid address"),
+                    amount: token::Amount::from_str(&x.amount)
+                        .expect("Amount of tokens must be convertable to number"),
+                    // auction_end: BlockHeight(x.auction_end.parse::<u64>().expect("End of the auction must be convertable to number"))
+                    auction_start: x.auction_start.parse::<u64>().expect("Start of the auction must be convertable to number"),
+                    auction_end: x.auction_end.parse::<u64>().expect("End of the auction must be convertable to number")
+                }),
+                None    => None,
+            };
+
+            let place_bid: Option<PlaceBid> = match value.place_bid {
+                Some(x) => Some(PlaceBid {
+                    amount: token::Amount::from_str(&x.amount)
+                        .expect("Amount of tokens must be convertable to number"),
+                    //auction_id: x.auction_id.expect("Amount of tokens must be convertable to number"),
+                    auction_id: x.auction_id
+
+                }),
+                None    => None,
+            };
+
+            Ok(Auction {
+                addr,
+                create_auction,
+                place_bid
+            })
+        }
+    }
+
     /// Query PoS bond(s)
     #[derive(Clone, Debug)]
     pub struct QueryBonds {
@@ -1928,45 +2034,135 @@ pub mod args {
                     .about("The gossip node address.")
                     .conflicts_with(TO_STDOUT.name),
             )
-            .arg(DATA_PATH.def().about(
-                "The data of the intent, that contains all value necessary \
+                .arg(DATA_PATH.def().about(
+                    "The data of the intent, that contains all value necessary \
                  for the matchmaker.",
-            ))
-            .arg(
-                SOURCE_OPT
-                    .def()
-                    .about(
-                        "Sign the intent with the key of a given address or \
+                ))
+                .arg(
+                    SOURCE_OPT
+                        .def()
+                        .about(
+                            "Sign the intent with the key of a given address or \
                          address alias from your wallet.",
-                    )
-                    .conflicts_with(SIGNING_KEY_OPT.name),
-            )
-            .arg(
-                SIGNING_KEY_OPT
-                    .def()
-                    .about(
-                        "Sign the intent with the key for the given public \
+                        )
+                        .conflicts_with(SIGNING_KEY_OPT.name),
+                )
+                .arg(
+                    SIGNING_KEY_OPT
+                        .def()
+                        .about(
+                            "Sign the intent with the key for the given public \
                          key, public key hash or alias from your wallet.",
-                    )
-                    .conflicts_with(SOURCE_OPT.name),
-            )
-            .arg(LEDGER_ADDRESS_DEFAULT.def().about(LEDGER_ADDRESS_ABOUT))
-            .arg(
-                TOPIC_OPT
-                    .def()
-                    .about("The subnetwork where the intent should be sent to.")
-                    .conflicts_with(TO_STDOUT.name),
-            )
-            .arg(
-                TO_STDOUT
-                    .def()
-                    .about(
-                        "Echo the serialized intent to stdout. Note that with \
+                        )
+                        .conflicts_with(SOURCE_OPT.name),
+                )
+                .arg(LEDGER_ADDRESS_DEFAULT.def().about(LEDGER_ADDRESS_ABOUT))
+                .arg(
+                    TOPIC_OPT
+                        .def()
+                        .about("The subnetwork where the intent should be sent to.")
+                        .conflicts_with(TO_STDOUT.name),
+                )
+                .arg(
+                    TO_STDOUT
+                        .def()
+                        .about(
+                            "Echo the serialized intent to stdout. Note that with \
                          this option, the intent won't be submitted to the \
                          intent gossiper RPC.",
+                        )
+                        .conflicts_with_all(&[NODE_OPT.name, TOPIC.name]),
+                )
+        }
+    }
+
+    /// Intent arguments
+    #[derive(Clone, Debug)]
+    pub struct AuctionIntent {
+        /// Gossip node address
+        pub node_addr: Option<String>,
+        /// Intent topic
+        pub topic: Option<String>,
+        /// Signing key
+        pub signing_key: Option<WalletKeypair>,
+        /// Exchanges description
+        pub auctions: Vec<Auction>,
+        /// The address of the ledger node as host:port
+        pub ledger_address: TendermintAddress,
+        /// Print output to stdout
+        pub to_stdout: bool,
+    }
+
+    impl Args for AuctionIntent {
+        fn parse(matches: &ArgMatches) -> Self {
+            let node_addr = NODE_OPT.parse(matches);
+            let data_path = DATA_PATH.parse(matches);
+            let signing_key = SIGNING_KEY_OPT.parse(matches);
+            let to_stdout = TO_STDOUT.parse(matches);
+            let topic = TOPIC_OPT.parse(matches);
+
+            let file = File::open(&data_path).expect("File must exist.");
+            let auction_definitions: Vec<AuctionDefinition> =
+                serde_json::from_reader(file)
+                    .expect("JSON was not well-formatted");
+
+            let auctions: Vec<Auction> = auction_definitions
+                .iter()
+                .map(|item| {
+                    Auction::try_from(item.clone()).expect(
+                        "Conversion from AuctionDefinition to Auction \
+                         should not fail.",
                     )
-                    .conflicts_with_all(&[NODE_OPT.name, TOPIC.name]),
+                })
+                .collect();
+            let ledger_address = LEDGER_ADDRESS_DEFAULT.parse(matches);
+
+            Self {
+                node_addr,
+                topic,
+                signing_key,
+                auctions,
+                ledger_address,
+                to_stdout,
+            }
+        }
+
+        fn def(app: App) -> App {
+            app.arg(
+                NODE_OPT
+                    .def()
+                    .about("The gossip node address.")
+                    .conflicts_with(TO_STDOUT.name),
             )
+                .arg(DATA_PATH.def().about(
+                    "The data of the intent, that contains all value necessary \
+                 for the matchmaker.",
+                ))
+                .arg(
+                    SIGNING_KEY_OPT
+                        .def()
+                        .about(
+                            "Sign the intent with the key for the given public \
+                         key, public key hash or alias from your wallet.",
+                        )
+                )
+                .arg(LEDGER_ADDRESS_DEFAULT.def().about(LEDGER_ADDRESS_ABOUT))
+                .arg(
+                    TOPIC_OPT
+                        .def()
+                        .about("The subnetwork where the intent should be sent to.")
+                        .conflicts_with(TO_STDOUT.name),
+                )
+                .arg(
+                    TO_STDOUT
+                        .def()
+                        .about(
+                            "Echo the serialized intent to stdout. Note that with \
+                         this option, the intent won't be submitted to the \
+                         intent gossiper RPC.",
+                        )
+                        .conflicts_with_all(&[NODE_OPT.name, TOPIC.name]),
+                )
         }
     }
 
@@ -2051,30 +2247,30 @@ pub mod args {
                 "Intent Gossiper endpoint for matchmaker connections as \
                  \"{host}:{port}\".",
             ))
-            .arg(MATCHMAKER_PATH.def().about(
-                "The file name of the matchmaker compiled to a dynamic \
+                .arg(MATCHMAKER_PATH.def().about(
+                    "The file name of the matchmaker compiled to a dynamic \
                  library (the filename extension is optional).",
-            ))
-            .arg(
-                TX_CODE_PATH
-                    .def()
-                    .about("The transaction code to use with the matchmaker."),
-            )
-            .arg(LEDGER_ADDRESS_DEFAULT.def().about(
-                "The address of the ledger as \"{scheme}://{host}:{port}\" \
+                ))
+                .arg(
+                    TX_CODE_PATH
+                        .def()
+                        .about("The transaction code to use with the matchmaker."),
+                )
+                .arg(LEDGER_ADDRESS_DEFAULT.def().about(
+                    "The address of the ledger as \"{scheme}://{host}:{port}\" \
                  that the matchmaker must send transactions to. If the scheme \
                  is not supplied, it is assumed to be TCP.",
-            ))
-            .arg(SIGNING_KEY.def().about(
-                "Sign the transactions created by the matchmaker with the key \
+                ))
+                .arg(SIGNING_KEY.def().about(
+                    "Sign the transactions created by the matchmaker with the key \
                  for the given public key, public key hash or alias from your \
                  wallet.",
-            ))
-            .arg(SOURCE.def().about(
-                "Source address or alias of an address of the transactions \
+                ))
+                .arg(SOURCE.def().about(
+                    "Source address or alias of an address of the transactions \
                  created by the matchmaker. This must be matching the signing \
                  key.",
-            ))
+                ))
         }
     }
 
@@ -2111,48 +2307,48 @@ pub mod args {
                     .def()
                     .about("Simulate the transaction application."),
             )
-            .arg(FORCE.def().about(
-                "Submit the transaction even if it doesn't pass client checks.",
-            ))
-            .arg(BROADCAST_ONLY.def().about(
-                "Do not wait for the transaction to be applied. This will \
+                .arg(FORCE.def().about(
+                    "Submit the transaction even if it doesn't pass client checks.",
+                ))
+                .arg(BROADCAST_ONLY.def().about(
+                    "Do not wait for the transaction to be applied. This will \
                  return once the transaction is added to the mempool.",
-            ))
-            .arg(LEDGER_ADDRESS_DEFAULT.def().about(LEDGER_ADDRESS_ABOUT))
-            .arg(ALIAS_OPT.def().about(
-                "If any new account is initialized by the tx, use the given \
+                ))
+                .arg(LEDGER_ADDRESS_DEFAULT.def().about(LEDGER_ADDRESS_ABOUT))
+                .arg(ALIAS_OPT.def().about(
+                    "If any new account is initialized by the tx, use the given \
                  alias to save it in the wallet. If multiple accounts are \
                  initialized, the alias will be the prefix of each new \
                  address joined with a number.",
-            ))
-            .arg(FEE_AMOUNT.def().about(
-                "The amount being paid for the inclusion of this transaction",
-            ))
-            .arg(FEE_TOKEN.def().about("The token for paying the fee"))
-            .arg(
-                GAS_LIMIT.def().about(
-                    "The maximum amount of gas needed to run transaction",
-                ),
-            )
-            .arg(
-                SIGNING_KEY_OPT
-                    .def()
-                    .about(
-                        "Sign the transaction with the key for the given \
+                ))
+                .arg(FEE_AMOUNT.def().about(
+                    "The amount being paid for the inclusion of this transaction",
+                ))
+                .arg(FEE_TOKEN.def().about("The token for paying the fee"))
+                .arg(
+                    GAS_LIMIT.def().about(
+                        "The maximum amount of gas needed to run transaction",
+                    ),
+                )
+                .arg(
+                    SIGNING_KEY_OPT
+                        .def()
+                        .about(
+                            "Sign the transaction with the key for the given \
                          public key, public key hash or alias from your \
                          wallet.",
-                    )
-                    .conflicts_with(SIGNER.name),
-            )
-            .arg(
-                SIGNER
-                    .def()
-                    .about(
-                        "Sign the transaction with the keypair of the public \
+                        )
+                        .conflicts_with(SIGNER.name),
+                )
+                .arg(
+                    SIGNER
+                        .def()
+                        .about(
+                            "Sign the transaction with the keypair of the public \
                          key of the given address.",
-                    )
-                    .conflicts_with(SIGNING_KEY_OPT.name),
-            )
+                        )
+                        .conflicts_with(SIGNING_KEY_OPT.name),
+                )
         }
 
         fn parse(matches: &ArgMatches) -> Self {
@@ -2224,10 +2420,10 @@ pub mod args {
                 "The key and address alias. If none provided, the alias will \
                  be the public key hash.",
             ))
-            .arg(UNSAFE_DONT_ENCRYPT.def().about(
-                "UNSAFE: Do not encrypt the keypair. Do not use this for keys \
+                .arg(UNSAFE_DONT_ENCRYPT.def().about(
+                    "UNSAFE: Do not encrypt the keypair. Do not use this for keys \
                  used in a live network.",
-            ))
+                ))
         }
     }
 
@@ -2262,22 +2458,22 @@ pub mod args {
                     .about("A public key associated with the keypair.")
                     .conflicts_with_all(&[ALIAS_OPT.name, VALUE.name]),
             )
-            .arg(
-                ALIAS_OPT
-                    .def()
-                    .about("An alias associated with the keypair.")
-                    .conflicts_with(VALUE.name),
-            )
-            .arg(
-                VALUE.def().about(
-                    "A public key or alias associated with the keypair.",
-                ),
-            )
-            .arg(
-                UNSAFE_SHOW_SECRET
-                    .def()
-                    .about("UNSAFE: Print the secret key."),
-            )
+                .arg(
+                    ALIAS_OPT
+                        .def()
+                        .about("An alias associated with the keypair.")
+                        .conflicts_with(VALUE.name),
+                )
+                .arg(
+                    VALUE.def().about(
+                        "A public key or alias associated with the keypair.",
+                    ),
+                )
+                .arg(
+                    UNSAFE_SHOW_SECRET
+                        .def()
+                        .about("UNSAFE: Print the secret key."),
+                )
         }
     }
 
@@ -2371,11 +2567,11 @@ pub mod args {
                     .def()
                     .about("An alias to be associated with the address."),
             )
-            .arg(
-                RAW_ADDRESS
-                    .def()
-                    .about("The bech32m encoded address string."),
-            )
+                .arg(
+                    RAW_ADDRESS
+                        .def()
+                        .about("The bech32m encoded address string."),
+                )
         }
     }
 
@@ -2436,36 +2632,36 @@ pub mod args {
                     "Path to the preliminary genesis configuration file.",
                 ),
             )
-            .arg(
-                WASM_CHECKSUMS_PATH
-                    .def()
-                    .about("Path to the WASM checksums file."),
-            )
-            .arg(CHAIN_ID_PREFIX.def().about(
-                "The chain ID prefix. Up to 19 alphanumeric, '.', '-' or '_' \
+                .arg(
+                    WASM_CHECKSUMS_PATH
+                        .def()
+                        .about("Path to the WASM checksums file."),
+                )
+                .arg(CHAIN_ID_PREFIX.def().about(
+                    "The chain ID prefix. Up to 19 alphanumeric, '.', '-' or '_' \
                  characters.",
-            ))
-            .arg(UNSAFE_DONT_ENCRYPT.def().about(
-                "UNSAFE: Do not encrypt the generated keypairs. Do not use \
+                ))
+                .arg(UNSAFE_DONT_ENCRYPT.def().about(
+                    "UNSAFE: Do not encrypt the generated keypairs. Do not use \
                  this for keys used in a live network.",
-            ))
-            .arg(CONSENSUS_TIMEOUT_COMMIT.def().about(
-                "The Tendermint consensus timeout_commit configuration as \
+                ))
+                .arg(CONSENSUS_TIMEOUT_COMMIT.def().about(
+                    "The Tendermint consensus timeout_commit configuration as \
                  e.g. `1s` or `1000ms`. Defaults to 10 seconds.",
-            ))
-            .arg(LOCALHOST.def().about(
-                "Use localhost address for P2P and RPC connections for the \
+                ))
+                .arg(LOCALHOST.def().about(
+                    "Use localhost address for P2P and RPC connections for the \
                  validators ledger and intent gossip nodes",
-            ))
-            .arg(ALLOW_DUPLICATE_IP.def().about(
-                "Toggle to disable guard against peers connecting from the \
+                ))
+                .arg(ALLOW_DUPLICATE_IP.def().about(
+                    "Toggle to disable guard against peers connecting from the \
                  same IP. This option shouldn't be used in mainnet.",
-            ))
-            .arg(
-                DONT_ARCHIVE
-                    .def()
-                    .about("Do NOT create the release archive."),
-            )
+                ))
+                .arg(
+                    DONT_ARCHIVE
+                        .def()
+                        .about("Do NOT create the release archive."),
+                )
         }
     }
 

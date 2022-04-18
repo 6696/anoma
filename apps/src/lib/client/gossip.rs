@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::io::Write;
 
-use anoma::types::intent::{Exchange, FungibleTokenIntent};
+use anoma::types::intent::{Auction, AuctionIntent, Exchange, FungibleTokenIntent};
 use anoma::types::key::ed25519::Signed;
 use borsh::BorshSerialize;
 #[cfg(not(feature = "ABCI"))]
@@ -92,6 +92,75 @@ pub async fn gossip_intent(
         };
     }
 }
+/// Create an intent, sign it and submit it to the gossip node (unless
+/// `to_stdout` is `true`).
+pub async fn gossip_auction_intent(
+    mut ctx: Context,
+    args::AuctionIntent {
+        node_addr,
+        topic,
+        signing_key,
+        auctions,
+        ledger_address,
+        to_stdout,
+    }: args::AuctionIntent,
+) {
+    let mut signed_auctions: HashSet<Signed<Auction>> =
+        HashSet::with_capacity(auctions.len());
+    for auction in auctions {
+        let signed =
+            sign_auction(&mut ctx.wallet, auction, ledger_address.clone())
+                .await;
+        signed_auctions.insert(signed);
+    }
+
+    let source_keypair = match ctx.get_opt_cached(&signing_key) {
+        Some(key) => key,
+        None => {
+            eprintln!("A source or a signing key is required.");
+            cli::safe_exit(1)
+        }
+    };
+    let signed_ac: Signed<AuctionIntent> = Signed::new(
+        &source_keypair,
+        AuctionIntent {
+            auctions: signed_auctions,
+        },
+    );
+    let data_bytes = signed_ac.try_to_vec().unwrap();
+
+    if to_stdout {
+        let mut out = std::io::stdout();
+        out.write_all(&data_bytes).unwrap();
+        out.flush().unwrap();
+    } else {
+        let node_addr = node_addr.expect(
+            "Gossip node address must be defined to submit the intent to it.",
+        );
+        let topic = topic.expect(
+            "The topic must be defined to submit the intent to a gossip node.",
+        );
+
+        match RpcServiceClient::connect(node_addr.clone()).await {
+            Ok(mut client) => {
+                let intent = anoma::proto::Intent::new(data_bytes);
+                let message: services::RpcMessage =
+                    RpcMessage::new_intent(intent, topic).into();
+                let response = client.send_message(message).await.expect(
+                    "Failed to send message and/or receive rpc response",
+                );
+                println!("{:#?}", response);
+            }
+            Err(e) => {
+                eprintln!(
+                    "Error connecting RPC client to {}: {}",
+                    node_addr, e
+                );
+            }
+        };
+    }
+}
+
 
 /// Request an intent gossip node with a  matchmaker to subscribe to a given
 /// topic.
@@ -116,4 +185,14 @@ async fn sign_exchange(
     let source_keypair =
         signing::find_keypair(wallet, &exchange.addr, ledger_address).await;
     Signed::new(&source_keypair, exchange.clone())
+}
+
+async fn sign_auction(
+    wallet: &mut Wallet,
+    auction: Auction,
+    ledger_address: TendermintAddress,
+) -> Signed<Auction> {
+    let source_keypair =
+        signing::find_keypair(wallet, &auction.addr, ledger_address).await;
+    Signed::new(&source_keypair, auction.clone())
 }

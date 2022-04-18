@@ -31,6 +31,96 @@ pub struct FungibleTokenIntent {
     pub exchange: HashSet<Signed<Exchange>>,
 }
 
+/// A simple intent for auction
+#[derive(
+Debug,
+Clone,
+PartialEq,
+BorshSerialize,
+BorshDeserialize,
+Serialize,
+Deserialize,
+Eq,
+)]
+pub struct AuctionIntent {
+    /// List of exchange definitions
+    pub auctions: HashSet<Signed<Auction>>,
+}
+
+
+#[derive(
+Debug,
+Clone,
+BorshSerialize,
+BorshDeserialize,
+Serialize,
+Deserialize,
+Eq,
+PartialEq,
+Hash,
+PartialOrd,
+Derivative,
+)]
+/// The definition of an intent exchange
+pub struct CreateAuction {
+    /// The token to be sold
+    pub token_sell: Address,
+    /// The token to be bought
+    pub token_buy: Address,
+    /// The amount of token to be put on auction
+    pub amount: token::Amount,
+    /// The amount of token to be put on auction
+    pub auction_start: u64,
+    /// The amount of token to be put on auction
+    pub auction_end: u64
+}
+
+
+#[derive(
+Debug,
+Clone,
+BorshSerialize,
+BorshDeserialize,
+Serialize,
+Deserialize,
+Eq,
+PartialEq,
+Hash,
+PartialOrd,
+Derivative,
+)]
+/// The definition of an intent exchange
+pub struct PlaceBid {
+    /// The bid
+    pub amount: token::Amount,
+    /// The auction id
+    pub auction_id: String
+}
+
+
+#[derive(
+Debug,
+Clone,
+BorshSerialize,
+BorshDeserialize,
+Serialize,
+Deserialize,
+Eq,
+PartialEq,
+Hash,
+PartialOrd,
+Derivative,
+)]
+/// The definition of an intent exchange
+pub struct Auction {
+    /// The source address
+    pub addr: Address,
+    /// The token to be sold
+    pub create_auction: Option<CreateAuction>,
+    /// The token to be bought
+    pub place_bid: Option<PlaceBid>,
+}
+
 #[derive(
     Debug,
     Clone,
