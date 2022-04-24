@@ -3838,6 +3838,7 @@ version = "0.4.0"
 dependencies = [
  "anoma",
  "anoma_macros",
+ "base64 0.13.0",
  "borsh",
  "good_lp",
  "petgraph 0.5.1",
