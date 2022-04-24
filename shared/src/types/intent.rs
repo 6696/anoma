@@ -72,7 +72,9 @@ pub struct CreateAuction {
     /// The amount of token to be put on auction
     pub auction_start: u64,
     /// The amount of token to be put on auction
-    pub auction_end: u64
+    pub auction_end: u64,
+    /// The amount of token to be put on auction
+    pub auction_clearance: u64
 }
 
 
@@ -91,8 +93,10 @@ Derivative,
 )]
 /// The definition of an intent exchange
 pub struct PlaceBid {
-    /// The bid
-    pub amount: token::Amount,
+    /// The encrypted bid
+    pub bid: String,
+    /// The encrypted bid
+    pub bid_id: u8,
     /// The auction id
     pub auction_id: String
 }

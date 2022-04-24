@@ -1807,14 +1807,18 @@ pub mod args {
         /// The block height at which the auction ends
         pub auction_start: String,
         /// The block height at which the auction ends
-        pub auction_end: String
+        pub auction_end: String,
+        /// The block height at which the auction ends
+        pub auction_clearance: String
     }
 
     /// Helper struct for generating intents
     #[derive(Debug, Clone, Deserialize)]
     pub struct PlaceBidDefinition {
         /// The bid
-        pub amount: String,
+        pub bid: String,
+        /// The bid
+        pub bid_id: String,
         /// The auction id
         pub auction_id: String
     }
@@ -1850,16 +1854,16 @@ pub mod args {
                         .expect("Amount of tokens must be convertable to number"),
                     // auction_end: BlockHeight(x.auction_end.parse::<u64>().expect("End of the auction must be convertable to number"))
                     auction_start: x.auction_start.parse::<u64>().expect("Start of the auction must be convertable to number"),
-                    auction_end: x.auction_end.parse::<u64>().expect("End of the auction must be convertable to number")
+                    auction_end: x.auction_end.parse::<u64>().expect("End of the auction must be convertable to number"),
+                    auction_clearance: x.auction_clearance.parse::<u64>().expect("Cleadance of the auction must be convertable to number")
                 }),
                 None    => None,
             };
 
             let place_bid: Option<PlaceBid> = match value.place_bid {
                 Some(x) => Some(PlaceBid {
-                    amount: token::Amount::from_str(&x.amount)
-                        .expect("Amount of tokens must be convertable to number"),
-                    //auction_id: x.auction_id.expect("Amount of tokens must be convertable to number"),
+                    bid: x.bid,
+                    bid_id: x.bid_id.parse::<u8>().expect("End of the auction must be convertable to number"),
                     auction_id: x.auction_id
 
                 }),
