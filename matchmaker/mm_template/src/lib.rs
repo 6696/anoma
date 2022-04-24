@@ -1,98 +1,23 @@
-use std::collections::{HashMap, VecDeque};
-
-use anoma::types::address::Address;
-use anoma::types::intent::{Auction, AuctionIntent, CreateAuction, Exchange, FungibleTokenIntent, MatchedExchanges, PlaceBid};
+use std::{process::Command, io::Write, io, collections::HashMap, time::SystemTime};
+use std::fs::OpenOptions;
+// use anoma::types::address::Address;
+use anoma::types::intent::{Auction, AuctionIntent, CreateAuction,
+                           // Exchange, FungibleTokenIntent, MatchedExchanges,
+                           PlaceBid};
 use anoma::types::matchmaker::{AddIntent, AddIntentResult};
-use anoma::types::token;
+// use anoma::types::token;
 use anoma_macros::Matchmaker;
 use anoma::types::key::ed25519::Signed;
 use borsh::{BorshDeserialize, BorshSerialize};
-use good_lp::{
-    constraint, default_solver, variable, variables, Expression,
-    ResolutionError, SolverModel, Variable, VariableDefinition,
-};
-use petgraph::graph::{node_index, DiGraph, NodeIndex};
-use petgraph::visit::{depth_first_search, Control, DfsEvent, EdgeRef};
-use rust_decimal::prelude::*;
+
+// use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256};
-use sha2::Digest;
+use sha2::{Digest, Sha256};
+use base64;
 
 // use anoma::ledger::vp_env::get_block_height;
 // use anoma_vp_prelude::*;
 
-#[derive(Default, Matchmaker)]
-struct AuctionMaker {
-    auctions_map: HashMap<String, AuctionEntry>,
-}
-
-impl AddIntent for AuctionMaker {
-    fn add_intent(
-        &mut self,
-        intent_id: &Vec<u8>,
-        intent_data: &Vec<u8>,
-    ) -> AddIntentResult {
-        let intent = decode_intent_data(&intent_data[..]);
-        let auctions = intent.data.auctions.clone();
-
-        println!("intent_id: {:?}", intent_id);
-
-        //TODO: check if intent is defined for an existing auction, and resolve it, if
-        // time is over
-        for x in &auctions {
-            println!("data: {:?}", x.data);
-            println!("signature: {:?}", x.sig);
-
-            // println!("auction_end: {:?}", x.data.auction_end);
-            println!("create_auction: {:?}", x.data.create_auction);
-            println!("place_bid: {:?}", x.data.place_bid);
-            // println!("current height: {:?}", get_block_height());
-            //TODO: get current height
-
-            let result = try_resolve_auction(
-                &mut self.auctions_map,
-                intent_id.to_vec(),
-                auction,
-                intent.clone(),
-            );
-
-            if result.is_some() {
-                return result.unwrap();
-            }
-        }
-
-        //TODO: add new auctions if intent is AuctionIntent
-        println!("trying to add create_auction intents");
-        auctions.into_iter().for_each(|auction| {
-            if auction.data.create_auction.is_some() {
-                add_auction_entry(
-                    &mut self.auctions_map,
-                    intent_id.to_vec(),
-                    auction,
-                    intent.clone(),
-                )
-            }
-        });
-
-        //TODO: add new bid if intent is BidIntent
-        println!("trying to add place_bid intents");
-        auctions.into_iter().for_each(|auction| {
-            if auction.data.place_bid.is_some() {
-                add_bid_entry(
-                    &mut self.auctions_map,
-                    intent_id.to_vec(),
-                    auction,
-                    intent.clone(),
-                )
-            }
-        });
-
-        AddIntentResult {
-            tx: None,
-            matched_intents: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BidEntry {
@@ -107,7 +32,77 @@ struct AuctionEntry {
     create_auction: CreateAuction,
     intent: Signed<AuctionIntent>,
     bids: Vec<BidEntry>,
+    result_calculated: bool,
 }
+
+#[derive(Default, Matchmaker)]
+struct AuctionMaker {
+    auctions_map: HashMap<String, AuctionEntry>,
+}
+
+impl AddIntent for AuctionMaker {
+    fn add_intent(
+        &mut self,
+        intent_id: &Vec<u8>,
+        intent_data: &Vec<u8>,
+    ) -> AddIntentResult {
+        let intent = decode_intent_data(&intent_data[..]);
+        let auctions = intent.data.auctions.clone();
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+
+        // println!("Trying to resolve auctions");
+        // for pair in &self.auctions_map {
+        //     let result = try_resolve_auction(pair);
+        //     if result.is_some() {
+        //         return result.unwrap();
+        //     }
+        //
+        //
+        // }
+
+        println!("intent_id: {:?}", intent_id);
+
+        // for x in &auctions {
+        //     println!("data: {:?}", x.data);
+        //     println!("signature: {:?}", x.sig);
+        //
+        //     // println!("create_auction: {:?}", x.data.create_auction);
+        //     // println!("place_bid: {:?}", x.data.place_bid);
+        //
+        //     // println!("current height: {:?}", get_block_height());
+        //     //TODO: get current height
+        //
+
+
+        //add new auctions if intent is AuctionIntent
+        println!("trying to add create_auction intents");
+        auctions.into_iter().for_each(|auction| {
+            if auction.data.create_auction.is_some() {
+                add_auction_entry(
+                    &mut self.auctions_map,
+                    intent_id.to_vec(),
+                    auction,
+                    intent.clone(),
+                    now,
+                )
+            } else if auction.data.place_bid.is_some() {
+                add_bid_entry(
+                    &mut self.auctions_map,
+                    intent_id.to_vec(),
+                    auction,
+                    intent.clone(),
+                    now,
+                )
+            }
+        });
+
+        AddIntentResult {
+            tx: None,
+            matched_intents: None,
+        }
+    }
+}
+
 
 // ???
 // impl PartialEq for ExchangeNode {
@@ -122,27 +117,43 @@ fn add_auction_entry(
     id: Vec<u8>,
     auction: Signed<Auction>,
     intent: Signed<AuctionIntent>,
+    now: u64,
 ) {
+    let auc = auction.data.create_auction.unwrap();
+    let start = auc.auction_start;
+    let end = auc.auction_end;
+    let clearance = auc.auction_clearance;
+
+    if now < start && start < end && end < clearance {
+        ()
+    } else { return; }
+
     let new_entry = AuctionEntry {
         id,
-        create_auction: auction.data.create_auction.unwrap().clone(),
+        create_auction: auc,
         intent,
         bids: vec![],
+        result_calculated: false,
     };
 
     // create a Sha256 object
     let mut hasher = Sha256::new();
     // write input message
-    hasher.update(new_entry.create_auction);
+    hasher.update(new_entry.intent.try_to_vec().unwrap());
     // read hash digest and consume hasher
     let key = hasher.finalize();
+    let key_string = format!("{:x?}", key).replace(&['[', ']', ',', ' '][..], "");
+    println!("auction id: {}\n", key_string);
 
-    if auctions_map.contains_key(&*key[..].encode_hex::<String>()) {
-        println!("Hashmap already contains entry with key: {:?}.", key[..]);
-        return;
+    match auctions_map.get(&key_string) {
+        Some(_a) => {
+            println!("Hashmap already contains entry with key: {:?}", key_string);
+            return;
+        }
+        None => ()
     }
 
-    auctions_map.insert(key[..].encode_hex::<String>(), new_entry.clone());
+    auctions_map.insert(key_string, new_entry);
 }
 
 /// Add a new node to the graph for the intent
@@ -151,45 +162,125 @@ fn add_bid_entry(
     id: Vec<u8>,
     auction: Signed<Auction>,
     intent: Signed<AuctionIntent>,
+    now: u64,
 ) {
     let new_entry = BidEntry {
         id,
-        place_bid: auction.data.place_bid.unwrap().clone(),
+        place_bid: auction.data.place_bid.unwrap(),
         intent,
     };
 
-    if auctions_map.contains_key(&new_entry.place_bid.auction_id) {
-        // println!("Hashmap already contains entry with key: {:?}.", key[..]);
-        // TODO:
-        return;
-    } else {
-        println!("No such auction exist with id: {:?}.", new_entry.place_bid.auction_id);
+    println!("auction id: {:x?}\n", new_entry.place_bid.auction_id);
+
+    // key.encode_hex::<String>().as_ref()
+    match auctions_map.get_mut(&new_entry.place_bid.auction_id) {
+        Some(a) => {
+            if a.create_auction.auction_start < now && now < a.create_auction.auction_end {
+                // push bids at the beginning
+                a.bids.push(new_entry);
+                // a.bids[new_entry.place_bid.bid_id] = new_entry;
+            } else if !a.result_calculated &&
+                a.create_auction.auction_end < now &&
+                now < a.create_auction.auction_clearance {
+                // calculate result in the middle
+                // base64 -> binary
+                for b in &a.bids {
+                    let id = b.place_bid.bid_id;
+                    let bytes = base64::decode(&b.place_bid.bid).unwrap();
+                    let path = format!("/home/daniil/IdeaProjects/\
+                        mk-tfhe-decoupled/build/test/server/client{}/sampleSeq{}.binary", id, id);
+                    let mut file = OpenOptions::new()
+                        .create_new(true)
+                        .write(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    file.write_all(&bytes).unwrap();
+                }
+                // run calculation
+                let output = Command::new("./mk_tfhe_server-spqlios-fma")
+                    .arg("c")
+                    .arg("./server")
+                    .current_dir("/home/daniil/IdeaProjects/mk-tfhe-decoupled/build/test")
+                    .output()
+                    .expect("Calculation failed");
+
+                println!("status: {}", output.status);
+                io::stdout().write_all(&output.stdout).unwrap();
+
+                a.result_calculated = true;
+            } else if a.result_calculated &&
+                a.create_auction.auction_clearance < now {
+                // resolve in the end
+                //TODO: read decrypted result, remove auction entry, create and return tx
+
+
+            }
+        }
+        None => {
+            println!("Hashmap does not contain entry with key: {:?}", new_entry.place_bid.auction_id);
+            return;
+        }
     }
 }
 
-/// Add a new node to the graph for the intent
-fn try_resolve_auction(
-    auctions_map: &mut HashMap<String, AuctionEntry>,
-    id: Vec<u8>,
-    auction: Signed<Auction>,
-    intent: Signed<AuctionIntent>,
-) -> Option<AddIntentResult> {
-    let new_entry = BidEntry {
-        id,
-        place_bid: auction.data.place_bid.unwrap().clone(),
-        intent,
-    };
-
-    return if auctions_map.contains_key(&new_entry.place_bid.auction_id) {
-        // TODO:
-        Some(AddIntentResult {
-            tx: None,
-            matched_intents: None,
-        })
-    } else {
-        None
-    }
+fn decode_intent_data(
+    bytes: &[u8],
+) -> Signed<AuctionIntent> {
+    Signed::<AuctionIntent>::try_from_slice(bytes).unwrap()
 }
+
+// Add a new node to the graph for the intent
+// fn try_resolve_auction(
+//     auctions_map: &mut HashMap<String, AuctionEntry>,
+//     id: Vec<u8>,
+//     auction: Signed<Auction>,
+//     intent: Signed<AuctionIntent>,
+// ) -> Option<AddIntentResult> {
+//
+//     // let new_entry = BidEntry {
+//     //     id,
+//     //     place_bid: auction.data.place_bid.unwrap(),
+//     //     intent,
+//     // };
+//
+//     if !pair.1.result_calculated &&
+//         pair.1.create_auction.auction_end < now &&
+//         now < pair.1.create_auction.auction_clearance {
+//         //TODO: calculate the result
+//
+//     } else if pair.1.result_calculated &&
+//         pair.1.create_auction.auction_clearance < now {
+//         //TODO: issue tx and remove auction entry
+//
+//     }
+//
+//     // key.encode_hex::<String>().as_ref()
+//     return match auctions_map.get_mut(&auction.data.place_bid.unwrap().auction_id) {
+//         Some(a) => {
+//             // TODO: check time and resolve
+//
+//             Some(AddIntentResult {
+//                 tx: None,
+//                 matched_intents: None,
+//             })
+//         },
+//         None => {
+//             None
+//         }
+//     }
+//
+//     // return if auctions_map.contains_key(&new_entry.place_bid.auction_id) {
+//     //     // TODO:
+//     //     Some(AddIntentResult {
+//     //         tx: None,
+//     //         matched_intents: None,
+//     //     })
+//     // } else {
+//     //     None
+//     // }
+// }
+
 
 // /// Find the nodes that are matching the intent on sell side and buy side.
 // fn find_nodes_to_update(
@@ -469,9 +560,3 @@ fn try_resolve_auction(
 //         amount,
 //     }
 // }
-
-fn decode_intent_data(
-    bytes: &[u8],
-) -> Signed<AuctionIntent> {
-    Signed::<AuctionIntent>::try_from_slice(bytes).unwrap()
-}
