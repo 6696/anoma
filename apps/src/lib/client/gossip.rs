@@ -14,6 +14,7 @@ use crate::cli::{self, args, Context};
 use crate::proto::services::rpc_service_client::RpcServiceClient;
 use crate::proto::{services, RpcMessage};
 use crate::wallet::Wallet;
+use sha2::{Digest, Sha256};
 
 /// Create an intent, sign it and submit it to the gossip node (unless
 /// `to_stdout` is `true`).
@@ -111,6 +112,15 @@ pub async fn gossip_auction_intent(
         let signed =
             sign_auction(&mut ctx.wallet, auction, ledger_address.clone())
                 .await;
+
+        let mut hasher = Sha256::new();
+        // write input message
+        hasher.update(signed.try_to_vec().unwrap());
+        // read hash digest and consume hasher
+        let key = hasher.finalize();
+        let key_string = format!("{:x?}", key).replace(&['[', ']', ',', ' '][..], "");
+        println!("auction id: {}\n", key_string);
+
         signed_auctions.insert(signed);
     }
 
