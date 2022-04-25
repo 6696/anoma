@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fs;
 use std::io::Write;
 
 use anoma::types::intent::{Auction, AuctionIntent, Exchange, FungibleTokenIntent};
@@ -119,7 +120,7 @@ pub async fn gossip_auction_intent(
         // read hash digest and consume hasher
         let key = hasher.finalize();
         let key_string = format!("{:x?}", key).replace(&['[', ']', ',', ' '][..], "");
-        println!("auction id: {}\n", key_string);
+        fs::write("./auction_id", key_string).expect("Unable to write file");
 
         signed_auctions.insert(signed);
     }
