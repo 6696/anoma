@@ -114,14 +114,6 @@ pub async fn gossip_auction_intent(
             sign_auction(&mut ctx.wallet, auction, ledger_address.clone())
                 .await;
 
-        let mut hasher = Sha256::new();
-        // write input message
-        hasher.update(signed.try_to_vec().unwrap());
-        // read hash digest and consume hasher
-        let key = hasher.finalize();
-        let key_string = format!("{:x?}", key).replace(&['[', ']', ',', ' '][..], "");
-        fs::write("./auction_id", key_string).expect("Unable to write file");
-
         signed_auctions.insert(signed);
     }
 
@@ -139,6 +131,15 @@ pub async fn gossip_auction_intent(
         },
     );
     let data_bytes = signed_ac.try_to_vec().unwrap();
+
+
+    let mut hasher = Sha256::new();
+    // write input message
+    hasher.update(&data_bytes);
+    // read hash digest and consume hasher
+    let key = hasher.finalize();
+    let key_string = format!("{:x?}", key).replace(&['[', ']', ',', ' '][..], "");
+    fs::write("./auction_id", key_string).expect("Unable to write file");
 
     if to_stdout {
         let mut out = std::io::stdout();
