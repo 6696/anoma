@@ -60,22 +60,15 @@ impl AddIntent for AuctionMaker {
         //
         // }
 
-        println!("intent_id: {:?}", intent_id);
+        // println!("intent_id: {:?}", intent_id);
 
         // for x in &auctions {
         //     println!("data: {:?}", x.data);
         //     println!("signature: {:?}", x.sig);
-        //
-        //     // println!("create_auction: {:?}", x.data.create_auction);
-        //     // println!("place_bid: {:?}", x.data.place_bid);
-        //
-        //     // println!("current height: {:?}", get_block_height());
-        //     //TODO: get current height
-        //
-
+        // }
 
         //add new auctions if intent is AuctionIntent
-        println!("trying to add create_auction intents");
+        // println!("trying to add create_auction intents");
         auctions.into_iter().for_each(|auction| {
             if auction.data.create_auction.is_some() {
                 add_auction_entry(
@@ -143,7 +136,6 @@ fn add_auction_entry(
     // read hash digest and consume hasher
     let key = hasher.finalize();
     let key_string = format!("{:x?}", key).replace(&['[', ']', ',', ' '][..], "");
-    println!("auction id: {}\n", key_string);
 
     match auctions_map.get(&key_string) {
         Some(_a) => {
@@ -153,7 +145,9 @@ fn add_auction_entry(
         None => ()
     }
 
-    auctions_map.insert(key_string, new_entry);
+    auctions_map.insert(key_string.clone(), new_entry);
+
+    println!("auction with id {} was successfully added\n", key_string);
 }
 
 /// Add a new node to the graph for the intent
@@ -177,7 +171,8 @@ fn add_bid_entry(
         Some(a) => {
             if a.create_auction.auction_start < now && now < a.create_auction.auction_end {
                 // push bids at the beginning
-                a.bids.push(new_entry);
+                a.bids.push(new_entry.clone());
+                println!("bid with auction id {} was successfully added\n", new_entry.place_bid.auction_id);
                 // a.bids[new_entry.place_bid.bid_id] = new_entry;
             } else if !a.result_calculated &&
                 a.create_auction.auction_end < now &&
@@ -192,7 +187,7 @@ fn add_bid_entry(
                     let mut file = OpenOptions::new()
                         .create_new(true)
                         .write(true)
-                        .append(true)
+                        .create_new(true)
                         .open(path)
                         .unwrap();
                     file.write_all(&bytes).unwrap();
@@ -209,12 +204,44 @@ fn add_bid_entry(
                 io::stdout().write_all(&output.stdout).unwrap();
 
                 a.result_calculated = true;
+                println!("auction with id {} was successfully calculated\n", new_entry.place_bid.auction_id);
             } else if a.result_calculated &&
                 a.create_auction.auction_clearance < now {
                 // resolve in the end
                 //TODO: read decrypted result, remove auction entry, create and return tx
 
+                // run Finalization
+                let output = Command::new("./mk_tfhe_client-spqlios-fma")
+                    .arg("f")
+                    .arg("./sampleResult.binary")
+                    .current_dir("/home/daniil/IdeaProjects/mk-tfhe-decoupled/build/test")
+                    .output()
+                    .expect("Finalization failed");
 
+                println!("status: {}", output.status);
+                io::stdout().write_all(&output.stdout).unwrap();
+                // for (0..(output.stdout.len()-1)).rev(){
+                //
+                // }
+                let mut str: Vec<u8> = vec![];
+                let mut c = 2;
+                for (_i, el) in output.stdout.iter().enumerate().rev() {
+                    if c > 0 {
+                        if *el == 0x10 {
+                            c -= 1;
+                        }
+                    } else {
+                        if c < 0 {
+                            break;
+                        }
+                        str.push(*el);
+                    }
+                }
+
+                println!("Result str is {:?}", str);
+                println!("auction with id {} was successfully cleared\n", new_entry.place_bid.auction_id);
+            } else {
+                println!("too late or too early for the bid")
             }
         }
         None => {
