@@ -18,6 +18,17 @@ use base64;
 // use anoma::ledger::vp_env::get_block_height;
 // use anoma_vp_prelude::*;
 
+use std::convert::AsMut;
+
+fn clone_into_array<A, T>(slice: &[T]) -> A
+    where
+        A: Default + AsMut<[T]>,
+        T: Clone,
+{
+    let mut a = A::default();
+    <A as AsMut<[T]>>::as_mut(&mut a).clone_from_slice(slice);
+    a
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BidEntry {
@@ -223,20 +234,25 @@ fn add_bid_entry(
                 // for (0..(output.stdout.len()-1)).rev(){
                 //
                 // }
-                let mut str: Vec<u8> = vec![];
-                let mut c = 2;
-                for (_i, el) in output.stdout.iter().enumerate().rev() {
-                    if c > 0 {
-                        if *el == 0x10 {
-                            c -= 1;
-                        }
-                    } else {
-                        if c < 0 {
-                            break;
-                        }
-                        str.push(*el);
-                    }
-                }
+                // let mut str: Vec<u8> = vec![];
+                let mut str: [u8; 6] = [0, 0, 0, 0, 0, 0];
+
+                // println!("Result str is {:?}", str);
+                str = clone_into_array(&output.stdout[80..86]);
+
+                // let mut c = 2;
+                // for (_i, el) in output.stdout.iter().enumerate().rev() {
+                //     if c > 0 {
+                //         if *el == 0x10 {
+                //             c -= 1;
+                //         }
+                //     } else {
+                //         if c == 0 {
+                //             break;
+                //         }
+                //         str.push(*el);
+                //     }
+                // }
 
                 println!("Result str is {:?}", str);
                 println!("auction with id {} was successfully cleared\n", new_entry.place_bid.auction_id);
